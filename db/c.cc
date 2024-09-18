@@ -6037,7 +6037,7 @@ rocksdb_export_import_files_metadata_create() {
 
 char* rocksdb_export_import_files_metadata_get_db_comparator_name(
     rocksdb_export_import_files_metadata_t* metadata) {
-  return CopyString(metadata->rep->db_comparator_name);
+  return strdup(metadata->rep->db_comparator_name.c_str());
 }
 
 void rocksdb_export_import_files_metadata_set_db_comparator_name(

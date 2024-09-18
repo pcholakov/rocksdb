@@ -2479,7 +2479,7 @@ rocksdb_fifo_compaction_options_get_max_table_files_size(
 extern ROCKSDB_LIBRARY_API void rocksdb_fifo_compaction_options_destroy(
     rocksdb_fifo_compaction_options_t* fifo_opts);
 
-extern ROCKSDB_LIBRARY_API rocksdb_livefiles_t* rocksdb_livefiles_create();
+extern ROCKSDB_LIBRARY_API rocksdb_livefiles_t* rocksdb_livefiles_create(void);
 
 extern ROCKSDB_LIBRARY_API int rocksdb_livefiles_count(
     const rocksdb_livefiles_t*);
@@ -2497,10 +2497,10 @@ extern ROCKSDB_LIBRARY_API const char* rocksdb_livefiles_smallestkey(
     const rocksdb_livefiles_t*, int index, size_t* size);
 extern ROCKSDB_LIBRARY_API const char* rocksdb_livefiles_largestkey(
     const rocksdb_livefiles_t*, int index, size_t* size);
-extern ROCKSDB_LIBRARY_API uint64_t rocksdb_livefiles_smallest_seqno(
-    const rocksdb_livefiles_t*, int index);
-extern ROCKSDB_LIBRARY_API uint64_t rocksdb_livefiles_largest_seqno(
-    const rocksdb_livefiles_t*, int index);
+extern ROCKSDB_LIBRARY_API uint64_t
+rocksdb_livefiles_smallest_seqno(const rocksdb_livefiles_t*, int index);
+extern ROCKSDB_LIBRARY_API uint64_t
+rocksdb_livefiles_largest_seqno(const rocksdb_livefiles_t*, int index);
 extern ROCKSDB_LIBRARY_API uint64_t
 rocksdb_livefiles_entries(const rocksdb_livefiles_t*, int index);
 extern ROCKSDB_LIBRARY_API uint64_t
@@ -2508,17 +2508,16 @@ rocksdb_livefiles_deletions(const rocksdb_livefiles_t*, int index);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefiles_destroy(
     const rocksdb_livefiles_t*);
 
-extern ROCKSDB_LIBRARY_API rocksdb_livefile_t* rocksdb_livefile_create();
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_column_family_name(
     rocksdb_livefile_t*, const char*);
-extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_level(
-    rocksdb_livefile_t*, int);
-extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_name(
-    rocksdb_livefile_t*, const char*);
+extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_level(rocksdb_livefile_t*,
+                                                           int);
+extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_name(rocksdb_livefile_t*,
+                                                          const char*);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_directory(
-rocksdb_livefile_t*, const char*);
-extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_size(
-    rocksdb_livefile_t*, size_t);
+    rocksdb_livefile_t*, const char*);
+extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_size(rocksdb_livefile_t*,
+                                                          size_t);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_smallest_key(
     rocksdb_livefile_t*, const char*, size_t);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_largest_key(
@@ -2535,7 +2534,7 @@ extern ROCKSDB_LIBRARY_API void rocksdb_livefile_destroy(rocksdb_livefile_t*);
 
 // Takes ownership of the livefile being added.
 extern ROCKSDB_LIBRARY_API void rocksdb_livefiles_add(rocksdb_livefiles_t*,
-    rocksdb_livefile_t*);
+                                                      rocksdb_livefile_t*);
 
 /* Utility Helpers */
 
@@ -2564,12 +2563,13 @@ extern ROCKSDB_LIBRARY_API void
 rocksdb_import_column_family_options_set_move_files(
     rocksdb_import_column_family_options_t*, unsigned char);
 
-extern ROCKSDB_LIBRARY_API void
-rocksdb_import_column_family_options_destroy(rocksdb_import_column_family_options_t*);
+extern ROCKSDB_LIBRARY_API void rocksdb_import_column_family_options_destroy(
+    rocksdb_import_column_family_options_t*);
 
 extern ROCKSDB_LIBRARY_API rocksdb_export_import_files_metadata_t*
 rocksdb_export_import_files_metadata_create(void);
 
+// Returns a copy of C-allocated NUL-terminated string.
 extern ROCKSDB_LIBRARY_API char*
 rocksdb_export_import_files_metadata_get_db_comparator_name(
     rocksdb_export_import_files_metadata_t*);
