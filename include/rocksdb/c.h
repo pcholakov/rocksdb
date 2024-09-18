@@ -2508,6 +2508,7 @@ rocksdb_livefiles_deletions(const rocksdb_livefiles_t*, int index);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefiles_destroy(
     const rocksdb_livefiles_t*);
 
+extern ROCKSDB_LIBRARY_API rocksdb_livefile_t* rocksdb_livefile_create(void);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_column_family_name(
     rocksdb_livefile_t*, const char*);
 extern ROCKSDB_LIBRARY_API void rocksdb_livefile_set_level(rocksdb_livefile_t*,
