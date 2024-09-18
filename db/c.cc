@@ -917,7 +917,7 @@ rocksdb_export_import_files_metadata_t* rocksdb_checkpoint_export_column_family(
     rocksdb_checkpoint_t* checkpoint,
     rocksdb_column_family_handle_t* column_family, const char* export_dir,
     char** errptr) {
-  ExportImportFilesMetaData* metadata;
+  ExportImportFilesMetaData* metadata = nullptr;
   if (SaveError(errptr,
                 checkpoint->rep->ExportColumnFamily(
                     column_family->rep, std::string(export_dir), &metadata))) {
