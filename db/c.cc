@@ -917,7 +917,7 @@ rocksdb_export_import_files_metadata_t* rocksdb_checkpoint_export_column_family(
     rocksdb_checkpoint_t* checkpoint,
     rocksdb_column_family_handle_t* column_family, const char* export_dir,
     char** errptr) {
-  ExportImportFilesMetaData* metadata;
+  ExportImportFilesMetaData* metadata = nullptr;
   if (SaveError(errptr,
                 checkpoint->rep->ExportColumnFamily(
                     column_family->rep, std::string(export_dir), &metadata))) {
@@ -1179,6 +1179,7 @@ rocksdb_column_family_handle_t* rocksdb_create_column_family_with_import(
     rocksdb_export_import_files_metadata_t* export_import_files_metadata,
     char** errptr) {
   rocksdb_column_family_handle_t* handle = new rocksdb_column_family_handle_t;
+  handle->rep = nullptr;
   SaveError(errptr, db->rep->CreateColumnFamilyWithImport(
                         ColumnFamilyOptions(column_family_options->rep),
                         std::string(column_family_name), import_options->rep,
@@ -6071,7 +6072,7 @@ rocksdb_export_import_files_metadata_create() {
 
 char* rocksdb_export_import_files_metadata_get_db_comparator_name(
     rocksdb_export_import_files_metadata_t* metadata) {
-  return CopyString(metadata->rep->db_comparator_name);
+  return strdup(metadata->rep->db_comparator_name.c_str());
 }
 
 void rocksdb_export_import_files_metadata_set_db_comparator_name(
