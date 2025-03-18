@@ -6090,7 +6090,6 @@ rocksdb_livefiles_t* rocksdb_export_import_files_metadata_get_files(
 void rocksdb_export_import_files_metadata_set_files(
     rocksdb_export_import_files_metadata_t* metadata,
     rocksdb_livefiles_t* files) {
-  metadata->rep->files.clear();
   metadata->rep->files = std::move(files->rep);
   delete files;
 }
