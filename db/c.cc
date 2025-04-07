@@ -5811,11 +5811,13 @@ const char* rocksdb_livefiles_largestkey(const rocksdb_livefiles_t* lf,
   return lf->rep[index].largestkey.data();
 }
 
-uint64_t rocksdb_livefiles_smallest_seqno(const rocksdb_livefiles_t* lf, int index) {
+uint64_t rocksdb_livefiles_smallest_seqno(const rocksdb_livefiles_t* lf,
+                                          int index) {
   return lf->rep[index].smallest_seqno;
 }
 
-uint64_t rocksdb_livefiles_largest_seqno(const rocksdb_livefiles_t* lf, int index) {
+uint64_t rocksdb_livefiles_largest_seqno(const rocksdb_livefiles_t* lf,
+                                         int index) {
   return lf->rep[index].largest_seqno;
 }
 
@@ -5829,9 +5831,7 @@ uint64_t rocksdb_livefiles_deletions(const rocksdb_livefiles_t* lf, int index) {
 
 void rocksdb_livefiles_destroy(const rocksdb_livefiles_t* lf) { delete lf; }
 
-rocksdb_livefile_t* rocksdb_livefile_create() {
-  return new rocksdb_livefile_t;
-}
+rocksdb_livefile_t* rocksdb_livefile_create() { return new rocksdb_livefile_t; }
 
 void rocksdb_livefile_set_column_family_name(rocksdb_livefile_t* lf,
                                              const char* column_family_name) {
@@ -5849,7 +5849,7 @@ void rocksdb_livefile_set_name(rocksdb_livefile_t* lf, const char* name) {
 void rocksdb_livefile_set_directory(rocksdb_livefile_t* lf,
                                     const char* directory) {
   lf->rep.directory = std::string(directory);
-  lf->rep.db_path = std::string(directory); // deprecated but still needed
+  lf->rep.db_path = std::string(directory);  // deprecated but still needed
 }
 
 void rocksdb_livefile_set_size(rocksdb_livefile_t* lf, size_t size) {
@@ -5888,9 +5888,7 @@ void rocksdb_livefile_set_num_deletions(rocksdb_livefile_t* lf,
   lf->rep.num_deletions = num_deletions;
 }
 
-void rocksdb_livefile_destroy(rocksdb_livefile_t* lf) {
-  delete lf;
-}
+void rocksdb_livefile_destroy(rocksdb_livefile_t* lf) { delete lf; }
 
 void rocksdb_livefiles_add(rocksdb_livefiles_t* lf,
                            rocksdb_livefile_t* livefile) {
