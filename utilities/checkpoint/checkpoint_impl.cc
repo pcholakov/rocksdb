@@ -88,6 +88,13 @@ Status Checkpoint::ExportColumnFamily(
   return Status::NotSupported("");
 }
 
+Status Checkpoint::ExportColumnFamilyOpts(
+    ColumnFamilyHandle* /*handle*/, bool /*flush_memtables*/,
+    const std::string& /*export_dir*/,
+    ExportImportFilesMetaData** /*metadata*/) {
+  return Status::NotSupported("");
+}
+
 // Builds an openable snapshot of RocksDB
 Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
                                         uint64_t log_size_for_flush,
@@ -307,11 +314,17 @@ Status CheckpointImpl::CreateCustomCheckpoint(
   return Status::OK();
 }
 
-// Exports all live SST files of a specified Column Family onto export_dir,
-// returning SST files information in metadata.
 Status CheckpointImpl::ExportColumnFamily(
     ColumnFamilyHandle* handle, const std::string& export_dir,
     ExportImportFilesMetaData** metadata) {
+  return ExportColumnFamilyOpts(handle, true, export_dir, metadata);
+}
+
+// Exports all live SST files of a specified Column Family onto export_dir,
+// returning SST files information in metadata.
+Status CheckpointImpl::ExportColumnFamilyOpts(
+    ColumnFamilyHandle* handle, bool flush_memtables,
+    const std::string& export_dir, ExportImportFilesMetaData** metadata) {
   auto cfh = static_cast_with_check<ColumnFamilyHandleImpl>(handle);
   const auto cf_name = cfh->GetName();
   const auto db_options = db_->GetDBOptions();
@@ -339,7 +352,8 @@ Status CheckpointImpl::ExportColumnFamily(
       export_dir.substr(0, final_nonslash_idx + 1) + ".tmp";
   s = db_->GetEnv()->CreateDir(tmp_export_dir);
 
-  if (s.ok()) {
+  // Flush memtables by default.
+  if (s.ok() && flush_memtables) {
     s = db_->Flush(ROCKSDB_NAMESPACE::FlushOptions(), handle);
   }
 

@@ -13,6 +13,10 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+struct ExportOpts {
+  bool flush;
+};
+
 class CheckpointImpl : public Checkpoint {
  public:
   explicit CheckpointImpl(DB* db) : db_(db) {}
@@ -24,6 +28,11 @@ class CheckpointImpl : public Checkpoint {
   Status ExportColumnFamily(ColumnFamilyHandle* handle,
                             const std::string& export_dir,
                             ExportImportFilesMetaData** metadata) override;
+
+  Status ExportColumnFamilyOpts(ColumnFamilyHandle* handle,
+                                bool flush_memtables,
+                                const std::string& export_dir,
+                                ExportImportFilesMetaData** metadata) override;
 
   // Checkpoint logic can be customized by providing callbacks for link, copy,
   // or create.

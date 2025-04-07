@@ -154,6 +154,8 @@ typedef struct rocksdb_import_column_family_options_t
     rocksdb_import_column_family_options_t;
 typedef struct rocksdb_export_import_files_metadata_t
     rocksdb_export_import_files_metadata_t;
+typedef struct rocksdb_checkpoint_export_opts_t
+    rocksdb_checkpoint_export_opts_t;
 typedef struct rocksdb_level_metadata_t rocksdb_level_metadata_t;
 typedef struct rocksdb_sst_file_metadata_t rocksdb_sst_file_metadata_t;
 typedef struct rocksdb_envoptions_t rocksdb_envoptions_t;
@@ -410,6 +412,22 @@ rocksdb_checkpoint_export_column_family(
     rocksdb_checkpoint_t* checkpoint,
     rocksdb_column_family_handle_t* column_family, const char* export_dir,
     char** errptr);
+
+extern ROCKSDB_LIBRARY_API rocksdb_export_import_files_metadata_t*
+rocksdb_checkpoint_export_column_family_opts(
+    rocksdb_checkpoint_t* checkpoint,
+    rocksdb_column_family_handle_t* column_family,
+    rocksdb_checkpoint_export_opts_t* opts, const char* export_dir,
+    char** errptr);
+
+extern ROCKSDB_LIBRARY_API rocksdb_checkpoint_export_opts_t*
+rocksdb_checkpoint_export_opts_create();
+
+extern ROCKSDB_LIBRARY_API void rocksdb_checkpoint_export_opts_set_flush(
+    rocksdb_checkpoint_export_opts_t*, bool flush);
+
+extern ROCKSDB_LIBRARY_API void rocksdb_checkpoint_export_opts_destroy(
+    rocksdb_checkpoint_export_opts_t*);
 
 extern ROCKSDB_LIBRARY_API void rocksdb_checkpoint_object_destroy(
     rocksdb_checkpoint_t* checkpoint);

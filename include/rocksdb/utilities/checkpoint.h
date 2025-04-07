@@ -59,6 +59,11 @@ class Checkpoint {
                                     const std::string& export_dir,
                                     ExportImportFilesMetaData** metadata);
 
+  virtual Status ExportColumnFamilyOpts(ColumnFamilyHandle* handle,
+                                        bool flush_memtables,
+                                        const std::string& export_dir,
+                                        ExportImportFilesMetaData** metadata);
+
   virtual ~Checkpoint() {}
 };
 

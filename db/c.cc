@@ -266,6 +266,9 @@ struct rocksdb_export_import_files_metadata_t {
 struct rocksdb_import_column_family_options_t {
   ImportColumnFamilyOptions rep;
 };
+struct rocksdb_checkpoint_export_opts_t {
+  bool flush;
+};
 struct rocksdb_level_metadata_t {
   const LevelMetaData* rep;
 };
@@ -431,7 +434,8 @@ struct rocksdb_event_listener_t : public EventListener {
   void (*destructor_)(void*);
 
   // EventListener callbacks
-  void (*on_flush_completed_)(void*, rocksdb_t* db, const rocksdb_flushinfo_t* info);
+  void (*on_flush_completed_)(void*, rocksdb_t* db,
+                              const rocksdb_flushinfo_t* info);
   void (*on_flush_begin_)(void*, rocksdb_t* db,
                           const rocksdb_flushinfo_t* info);
   void (*on_table_file_deleted_)(void*,
@@ -1491,14 +1495,29 @@ void rocksdb_checkpoint_create(rocksdb_checkpoint_t* checkpoint,
                         std::string(checkpoint_dir), log_size_for_flush));
 }
 
-rocksdb_export_import_files_metadata_t* rocksdb_checkpoint_export_column_family(
+rocksdb_checkpoint_export_opts_t* rocksdb_checkpoint_export_opts_create() {
+  return new rocksdb_checkpoint_export_opts_t;
+}
+
+void rocksdb_checkpoint_export_opts_set_flush(
+    rocksdb_checkpoint_export_opts_t* opts, bool flush) {
+  opts->flush = flush;
+}
+
+void rocksdb_checkpoint_export_opts_destroy(rocksdb_checkpoint_export_opts_t* opts) {
+    delete opts;
+}
+
+rocksdb_export_import_files_metadata_t*
+rocksdb_checkpoint_export_column_family_opts(
     rocksdb_checkpoint_t* checkpoint,
-    rocksdb_column_family_handle_t* column_family, const char* export_dir,
+    rocksdb_column_family_handle_t* column_family,
+    rocksdb_checkpoint_export_opts_t* opts, const char* export_dir,
     char** errptr) {
   ExportImportFilesMetaData* metadata = nullptr;
-  if (SaveError(errptr,
-                checkpoint->rep->ExportColumnFamily(
-                    column_family->rep, std::string(export_dir), &metadata))) {
+  if (SaveError(errptr, checkpoint->rep->ExportColumnFamilyOpts(
+                            column_family->rep, opts == nullptr || opts->flush,
+                            std::string(export_dir), &metadata))) {
     return nullptr;
   }
   rocksdb_export_import_files_metadata_t* result =
