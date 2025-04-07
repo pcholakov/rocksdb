@@ -24,6 +24,7 @@
 #include "rocksdb/experimental.h"
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/iterator.h"
+#include "rocksdb/listener.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/options.h"
@@ -49,11 +50,16 @@
 #include "util/stderr_logger.h"
 #include "utilities/merge_operators.h"
 
+using ROCKSDB_NAMESPACE::BackgroundErrorReason;
+using ROCKSDB_NAMESPACE::BackgroundErrorRecoveryInfo;
 using ROCKSDB_NAMESPACE::BackupEngine;
 using ROCKSDB_NAMESPACE::BackupEngineOptions;
 using ROCKSDB_NAMESPACE::BackupID;
 using ROCKSDB_NAMESPACE::BackupInfo;
 using ROCKSDB_NAMESPACE::BatchResult;
+using ROCKSDB_NAMESPACE::BlobFileCreationBriefInfo;
+using ROCKSDB_NAMESPACE::BlobFileCreationInfo;
+using ROCKSDB_NAMESPACE::BlobFileDeletionInfo;
 using ROCKSDB_NAMESPACE::BlockBasedTableOptions;
 using ROCKSDB_NAMESPACE::BottommostLevelCompaction;
 using ROCKSDB_NAMESPACE::BytewiseComparator;
@@ -65,6 +71,7 @@ using ROCKSDB_NAMESPACE::ColumnFamilyMetaData;
 using ROCKSDB_NAMESPACE::ColumnFamilyOptions;
 using ROCKSDB_NAMESPACE::CompactionFilter;
 using ROCKSDB_NAMESPACE::CompactionFilterFactory;
+using ROCKSDB_NAMESPACE::CompactionJobInfo;
 using ROCKSDB_NAMESPACE::CompactionOptionsFIFO;
 using ROCKSDB_NAMESPACE::CompactRangeOptions;
 using ROCKSDB_NAMESPACE::Comparator;
@@ -76,22 +83,29 @@ using ROCKSDB_NAMESPACE::DBOptions;
 using ROCKSDB_NAMESPACE::DbPath;
 using ROCKSDB_NAMESPACE::Env;
 using ROCKSDB_NAMESPACE::EnvOptions;
+using ROCKSDB_NAMESPACE::EventListener;
 using ROCKSDB_NAMESPACE::ExportImportFilesMetaData;
+using ROCKSDB_NAMESPACE::ExternalFileIngestionInfo;
 using ROCKSDB_NAMESPACE::FileLock;
+using ROCKSDB_NAMESPACE::FileOperationInfo;
 using ROCKSDB_NAMESPACE::FilterPolicy;
+using ROCKSDB_NAMESPACE::FlushJobInfo;
 using ROCKSDB_NAMESPACE::FlushOptions;
 using ROCKSDB_NAMESPACE::HistogramData;
 using ROCKSDB_NAMESPACE::HyperClockCacheOptions;
 using ROCKSDB_NAMESPACE::ImportColumnFamilyOptions;
 using ROCKSDB_NAMESPACE::InfoLogLevel;
 using ROCKSDB_NAMESPACE::IngestExternalFileOptions;
+using ROCKSDB_NAMESPACE::IOErrorInfo;
 using ROCKSDB_NAMESPACE::Iterator;
 using ROCKSDB_NAMESPACE::LevelMetaData;
 using ROCKSDB_NAMESPACE::LiveFileMetaData;
 using ROCKSDB_NAMESPACE::Logger;
 using ROCKSDB_NAMESPACE::LRUCacheOptions;
+using ROCKSDB_NAMESPACE::ManualFlushInfo;
 using ROCKSDB_NAMESPACE::MemoryAllocator;
 using ROCKSDB_NAMESPACE::MemoryUtil;
+using ROCKSDB_NAMESPACE::MemTableInfo;
 using ROCKSDB_NAMESPACE::MergeOperator;
 using ROCKSDB_NAMESPACE::NewBloomFilterPolicy;
 using ROCKSDB_NAMESPACE::NewCompactOnDeletionCollectorFactory;
@@ -119,6 +133,10 @@ using ROCKSDB_NAMESPACE::SstFileMetaData;
 using ROCKSDB_NAMESPACE::SstFileWriter;
 using ROCKSDB_NAMESPACE::Status;
 using ROCKSDB_NAMESPACE::StderrLogger;
+using ROCKSDB_NAMESPACE::SubcompactionJobInfo;
+using ROCKSDB_NAMESPACE::TableFileCreationBriefInfo;
+using ROCKSDB_NAMESPACE::TableFileCreationInfo;
+using ROCKSDB_NAMESPACE::TableFileDeletionInfo;
 using ROCKSDB_NAMESPACE::TablePropertiesCollectorFactory;
 using ROCKSDB_NAMESPACE::Transaction;
 using ROCKSDB_NAMESPACE::TransactionDB;
@@ -132,6 +150,7 @@ using ROCKSDB_NAMESPACE::WriteBatch;
 using ROCKSDB_NAMESPACE::WriteBatchWithIndex;
 using ROCKSDB_NAMESPACE::WriteBufferManager;
 using ROCKSDB_NAMESPACE::WriteOptions;
+using ROCKSDB_NAMESPACE::WriteStallInfo;
 
 using std::unordered_set;
 using std::vector;
@@ -406,6 +425,565 @@ struct rocksdb_comparator_t : public Comparator {
   void FindShortestSeparator(std::string*, const Slice&) const override {}
   void FindShortSuccessor(std::string* /*key*/) const override {}
 };
+
+struct rocksdb_event_listener_t : public EventListener {
+  void* state_;
+  void (*destructor_)(void*);
+
+  // EventListener callbacks
+  void (*on_flush_completed_)(void*, rocksdb_t* db, const rocksdb_flushinfo_t* info);
+  void (*on_flush_begin_)(void*, rocksdb_t* db,
+                          const rocksdb_flushinfo_t* info);
+  void (*on_table_file_deleted_)(void*,
+                                 const rocksdb_tablefiledeletioninfo_t* info);
+  void (*on_compaction_begin_)(void*, rocksdb_t* db,
+                               const rocksdb_compactionjobinfo_t* info);
+  void (*on_compaction_completed_)(void*, rocksdb_t* db,
+                                   const rocksdb_compactionjobinfo_t* info);
+  void (*on_subcompaction_begin_)(void*,
+                                  const rocksdb_subcompactionjobinfo_t* info);
+  void (*on_subcompaction_completed_)(
+      void*, const rocksdb_subcompactionjobinfo_t* info);
+  void (*on_table_file_created_)(void*,
+                                 const rocksdb_tablefilecreationinfo_t* info);
+  void (*on_table_file_creation_started_)(
+      void*, const rocksdb_tablefilecreationbriefinfo_t* info);
+  void (*on_memtable_sealed_)(void*, const rocksdb_memtableinfo_t* info);
+  void (*on_column_family_handle_deletion_started_)(
+      void*, rocksdb_column_family_handle_t* handle);
+  void (*on_external_file_ingested_)(
+      void*, rocksdb_t* db, const rocksdb_externalfileingestioninfo_t* info);
+  void (*on_background_error_)(void*, int /*background_error_reason*/,
+                               char** errptr);
+  void (*on_stall_conditions_changed_)(void*,
+                                       const rocksdb_writestallinfo_t* info);
+  void (*on_file_read_finish_)(void*, const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_write_finish_)(void*, const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_flush_finish_)(void*, const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_sync_finish_)(void*, const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_range_sync_finish_)(void*,
+                                     const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_truncate_finish_)(void*,
+                                   const rocksdb_fileoperationinfo_t* info);
+  void (*on_file_close_finish_)(void*, const rocksdb_fileoperationinfo_t* info);
+  unsigned char (*should_be_notified_on_file_io_)(void*);
+  void (*on_error_recovery_begin_)(void*, int /*background_error_reason*/,
+                                   const char* error_msg,
+                                   unsigned char* auto_recovery);
+  void (*on_error_recovery_end_)(
+      void*, const rocksdb_backgrounderrorrecoveryinfo_t* info);
+  void (*on_blob_file_creation_started_)(
+      void*, const rocksdb_blobfilecreationbriefinfo_t* info);
+  void (*on_blob_file_created_)(void*,
+                                const rocksdb_blobfilecreationinfo_t* info);
+  void (*on_blob_file_deleted_)(void*,
+                                const rocksdb_blobfiledeletioninfo_t* info);
+  void (*on_manual_flush_scheduled_)(
+      void*, rocksdb_t* db, const rocksdb_manualflushinfo_t* manual_flush_info);
+  void (*on_io_error_)(void*, const rocksdb_ioerrorinfo_t* info);
+
+  rocksdb_event_listener_t() : EventListener() {}
+
+  ~rocksdb_event_listener_t() override { (*destructor_)(state_); }
+
+  // EventListener methods
+
+  const char* Name() const override { return "rocksdb_event_listener_t"; }
+
+  void OnFlushCompleted(DB* db, const FlushJobInfo& info) override {
+    if (on_flush_completed_) {
+      (*on_flush_completed_)(state_, reinterpret_cast<rocksdb_t*>(db), &info);
+    }
+  }
+
+  void OnFlushBegin(DB* db, const FlushJobInfo& info) override {
+    if (on_flush_begin_) {
+      (*on_flush_begin_)(state_, reinterpret_cast<rocksdb_t*>(db),
+                         reinterpret_cast<const rocksdb_flushinfo_t*>(&info));
+    }
+  }
+
+  void OnTableFileDeleted(const TableFileDeletionInfo& info) override {
+    if (on_table_file_deleted_) {
+      (*on_table_file_deleted_)(
+          state_,
+          reinterpret_cast<const rocksdb_tablefiledeletioninfo_t*>(&info));
+    }
+  }
+
+  void OnCompactionBegin(DB* db, const CompactionJobInfo& info) override {
+    if (on_compaction_begin_) {
+      (*on_compaction_begin_)(
+          state_, reinterpret_cast<rocksdb_t*>(db),
+          reinterpret_cast<const rocksdb_compactionjobinfo_t*>(&info));
+    }
+  }
+
+  void OnCompactionCompleted(DB* db, const CompactionJobInfo& info) override {
+    if (on_compaction_completed_) {
+      (*on_compaction_completed_)(
+          state_, reinterpret_cast<rocksdb_t*>(db),
+          reinterpret_cast<const rocksdb_compactionjobinfo_t*>(&info));
+    }
+  }
+
+  void OnSubcompactionBegin(const SubcompactionJobInfo& info) override {
+    if (on_subcompaction_begin_) {
+      (*on_subcompaction_begin_)(
+          state_,
+          reinterpret_cast<const rocksdb_subcompactionjobinfo_t*>(&info));
+    }
+  }
+
+  void OnSubcompactionCompleted(const SubcompactionJobInfo& info) override {
+    if (on_subcompaction_completed_) {
+      (*on_subcompaction_completed_)(
+          state_,
+          reinterpret_cast<const rocksdb_subcompactionjobinfo_t*>(&info));
+    }
+  }
+
+  void OnTableFileCreated(const TableFileCreationInfo& info) override {
+    if (on_table_file_created_) {
+      (*on_table_file_created_)(
+          state_,
+          reinterpret_cast<const rocksdb_tablefilecreationinfo_t*>(&info));
+    }
+  }
+
+  void OnTableFileCreationStarted(
+      const TableFileCreationBriefInfo& info) override {
+    if (on_table_file_creation_started_) {
+      (*on_table_file_creation_started_)(
+          state_,
+          reinterpret_cast<const rocksdb_tablefilecreationbriefinfo_t*>(&info));
+    }
+  }
+
+  void OnMemTableSealed(const MemTableInfo& info) override {
+    if (on_memtable_sealed_) {
+      (*on_memtable_sealed_)(
+          state_, reinterpret_cast<const rocksdb_memtableinfo_t*>(&info));
+    }
+  }
+
+  void OnColumnFamilyHandleDeletionStarted(
+      ColumnFamilyHandle* handle) override {
+    if (on_column_family_handle_deletion_started_) {
+      (*on_column_family_handle_deletion_started_)(
+          state_, reinterpret_cast<rocksdb_column_family_handle_t*>(handle));
+    }
+  }
+
+  void OnExternalFileIngested(DB* db,
+                              const ExternalFileIngestionInfo& info) override {
+    if (on_external_file_ingested_) {
+      (*on_external_file_ingested_)(
+          state_, reinterpret_cast<rocksdb_t*>(db),
+          reinterpret_cast<const rocksdb_externalfileingestioninfo_t*>(&info));
+    }
+  }
+
+  void OnBackgroundError(BackgroundErrorReason reason,
+                         Status* bg_error) override {
+    if (on_background_error_) {
+      // Create a C-style error string from the Status object
+      char* error_msg = nullptr;
+      if (bg_error != nullptr && !bg_error->ok()) {
+        std::string err_str = bg_error->ToString();
+        error_msg = strdup(
+            err_str.c_str());  // Allocate a copy that the C code can free
+      }
+
+      (*on_background_error_)(
+          state_, static_cast<rocksdb_backgrounderrorreason_t>(reason),
+          &error_msg);
+
+      // If the callback didn't take ownership of error_msg, free it
+      if (error_msg != nullptr) {
+        free(error_msg);
+      }
+    }
+  }
+
+  void OnStallConditionsChanged(const WriteStallInfo& info) override {
+    if (on_stall_conditions_changed_) {
+      (*on_stall_conditions_changed_)(
+          state_, reinterpret_cast<const rocksdb_writestallinfo_t*>(&info));
+    }
+  }
+
+  void OnFileReadFinish(const FileOperationInfo& info) override {
+    if (on_file_read_finish_) {
+      (*on_file_read_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileWriteFinish(const FileOperationInfo& info) override {
+    if (on_file_write_finish_) {
+      (*on_file_write_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileFlushFinish(const FileOperationInfo& info) override {
+    if (on_file_flush_finish_) {
+      (*on_file_flush_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileSyncFinish(const FileOperationInfo& info) override {
+    if (on_file_sync_finish_) {
+      (*on_file_sync_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileRangeSyncFinish(const FileOperationInfo& info) override {
+    if (on_file_range_sync_finish_) {
+      (*on_file_range_sync_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileTruncateFinish(const FileOperationInfo& info) override {
+    if (on_file_truncate_finish_) {
+      (*on_file_truncate_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  void OnFileCloseFinish(const FileOperationInfo& info) override {
+    if (on_file_close_finish_) {
+      (*on_file_close_finish_)(
+          state_, reinterpret_cast<const rocksdb_fileoperationinfo_t*>(&info));
+    }
+  }
+
+  bool ShouldBeNotifiedOnFileIO() override {
+    if (should_be_notified_on_file_io_) {
+      return (*should_be_notified_on_file_io_)(state_) != 0;
+    }
+    return false;
+  }
+
+  void OnErrorRecoveryBegin(BackgroundErrorReason reason, Status bg_error,
+                            bool* auto_recovery) override {
+    if (on_error_recovery_begin_) {
+      (*on_error_recovery_begin_)(
+          state_, static_cast<rocksdb_backgrounderrorreason_t>(reason),
+          bg_error.ToString().c_str(),
+          reinterpret_cast<unsigned char*>(auto_recovery));
+    }
+  }
+
+  void OnErrorRecoveryEnd(const BackgroundErrorRecoveryInfo& info) override {
+    if (on_error_recovery_end_) {
+      (*on_error_recovery_end_)(
+          state_,
+          reinterpret_cast<const rocksdb_backgrounderrorrecoveryinfo_t*>(
+              &info));
+    }
+  }
+
+  void OnBlobFileCreationStarted(
+      const BlobFileCreationBriefInfo& info) override {
+    if (on_blob_file_creation_started_) {
+      (*on_blob_file_creation_started_)(
+          state_,
+          reinterpret_cast<const rocksdb_blobfilecreationbriefinfo_t*>(&info));
+    }
+  }
+
+  void OnBlobFileCreated(const BlobFileCreationInfo& info) override {
+    if (on_blob_file_created_) {
+      (*on_blob_file_created_)(
+          state_,
+          reinterpret_cast<const rocksdb_blobfilecreationinfo_t*>(&info));
+    }
+  }
+
+  void OnBlobFileDeleted(const BlobFileDeletionInfo& info) override {
+    if (on_blob_file_deleted_) {
+      (*on_blob_file_deleted_)(
+          state_,
+          reinterpret_cast<const rocksdb_blobfiledeletioninfo_t*>(&info));
+    }
+  }
+
+  void OnManualFlushScheduled(
+      DB* db, const std::vector<ManualFlushInfo>& manual_flush_info) override {
+    if (on_manual_flush_scheduled_) {
+      (*on_manual_flush_scheduled_)(
+          state_, reinterpret_cast<rocksdb_t*>(db),
+          reinterpret_cast<const rocksdb_manualflushinfo_t*>(
+              &manual_flush_info));
+    }
+  }
+
+  void OnIOError(const IOErrorInfo& info) override {
+    if (on_io_error_) {
+      (*on_io_error_)(state_,
+                      reinterpret_cast<const rocksdb_ioerrorinfo_t*>(&info));
+    }
+  }
+};
+
+rocksdb_event_listener_t* rocksdb_event_listener_create(
+    void* state, void (*destructor_)(void*)) {
+  rocksdb_event_listener_t* result = new rocksdb_event_listener_t;
+  result->state_ = state;
+  result->destructor_ = destructor_;
+
+  // Initialize all function pointers to nullptr
+  result->on_flush_completed_ = nullptr;
+  result->on_flush_begin_ = nullptr;
+  result->on_table_file_deleted_ = nullptr;
+  result->on_compaction_begin_ = nullptr;
+  result->on_compaction_completed_ = nullptr;
+  result->on_subcompaction_begin_ = nullptr;
+  result->on_subcompaction_completed_ = nullptr;
+  result->on_table_file_created_ = nullptr;
+  result->on_table_file_creation_started_ = nullptr;
+  result->on_memtable_sealed_ = nullptr;
+  result->on_column_family_handle_deletion_started_ = nullptr;
+  result->on_external_file_ingested_ = nullptr;
+  result->on_background_error_ = nullptr;
+  result->on_stall_conditions_changed_ = nullptr;
+  result->on_file_read_finish_ = nullptr;
+  result->on_file_write_finish_ = nullptr;
+  result->on_file_flush_finish_ = nullptr;
+  result->on_file_sync_finish_ = nullptr;
+  result->on_file_range_sync_finish_ = nullptr;
+  result->on_file_truncate_finish_ = nullptr;
+  result->on_file_close_finish_ = nullptr;
+  result->should_be_notified_on_file_io_ = nullptr;
+  result->on_error_recovery_begin_ = nullptr;
+  result->on_error_recovery_end_ = nullptr;
+  result->on_blob_file_creation_started_ = nullptr;
+  result->on_blob_file_created_ = nullptr;
+  result->on_blob_file_deleted_ = nullptr;
+  result->on_manual_flush_scheduled_ = nullptr;
+  result->on_io_error_ = nullptr;
+
+  return result;
+}
+
+void rocksdb_event_listener_destroy(rocksdb_event_listener_t* t) { delete t; }
+
+// Functions for setting callbacks
+
+void rocksdb_event_listener_set_flush_completed(
+    rocksdb_event_listener_t* t,
+    void (*on_flush_completed)(void*, rocksdb_t*, const rocksdb_flushinfo_t*)) {
+  t->on_flush_completed_ = on_flush_completed;
+}
+
+void rocksdb_event_listener_set_flush_begin(
+    rocksdb_event_listener_t* t,
+    void (*on_flush_begin)(void*, rocksdb_t*, const rocksdb_flushinfo_t*)) {
+  t->on_flush_begin_ = on_flush_begin;
+}
+
+void rocksdb_event_listener_set_table_file_deleted(
+    rocksdb_event_listener_t* t,
+    void (*on_table_file_deleted)(void*,
+                                  const rocksdb_tablefiledeletioninfo_t*)) {
+  t->on_table_file_deleted_ = on_table_file_deleted;
+}
+
+void rocksdb_event_listener_set_compaction_begin(
+    rocksdb_event_listener_t* t,
+    void (*on_compaction_begin)(void*, rocksdb_t*,
+                                const rocksdb_compactionjobinfo_t*)) {
+  t->on_compaction_begin_ = on_compaction_begin;
+}
+
+void rocksdb_event_listener_set_compaction_completed(
+    rocksdb_event_listener_t* t,
+    void (*on_compaction_completed)(void*, rocksdb_t*,
+                                    const rocksdb_compactionjobinfo_t*)) {
+  t->on_compaction_completed_ = on_compaction_completed;
+}
+
+void rocksdb_event_listener_set_subcompaction_begin(
+    rocksdb_event_listener_t* t,
+    void (*on_subcompaction_begin)(void*,
+                                   const rocksdb_subcompactionjobinfo_t*)) {
+  t->on_subcompaction_begin_ = on_subcompaction_begin;
+}
+
+void rocksdb_event_listener_set_subcompaction_completed(
+    rocksdb_event_listener_t* t,
+    void (*on_subcompaction_completed)(void*,
+                                       const rocksdb_subcompactionjobinfo_t*)) {
+  t->on_subcompaction_completed_ = on_subcompaction_completed;
+}
+
+void rocksdb_event_listener_set_table_file_created(
+    rocksdb_event_listener_t* t,
+    void (*on_table_file_created)(void*,
+                                  const rocksdb_tablefilecreationinfo_t*)) {
+  t->on_table_file_created_ = on_table_file_created;
+}
+
+void rocksdb_event_listener_set_table_file_creation_started(
+    rocksdb_event_listener_t* t,
+    void (*on_table_file_creation_started)(
+        void*, const rocksdb_tablefilecreationbriefinfo_t*)) {
+  t->on_table_file_creation_started_ = on_table_file_creation_started;
+}
+
+void rocksdb_event_listener_set_memtable_sealed(
+    rocksdb_event_listener_t* t,
+    void (*on_mem_table_sealed)(void*, const rocksdb_memtableinfo_t*)) {
+  t->on_memtable_sealed_ = on_mem_table_sealed;
+}
+
+void rocksdb_event_listener_set_column_family_handle_deletion_started(
+    rocksdb_event_listener_t* t,
+    void (*on_column_family_handle_deletion_started)(
+        void*, rocksdb_column_family_handle_t*)) {
+  t->on_column_family_handle_deletion_started_ =
+      on_column_family_handle_deletion_started;
+}
+
+void rocksdb_event_listener_set_external_file_ingested(
+    rocksdb_event_listener_t* t,
+    void (*on_external_file_ingested)(
+        void*, rocksdb_t*, const rocksdb_externalfileingestioninfo_t*)) {
+  t->on_external_file_ingested_ = on_external_file_ingested;
+}
+
+void rocksdb_event_listener_set_background_error(
+    rocksdb_event_listener_t* t,
+    void (*on_background_error)(void*, rocksdb_backgrounderrorreason_t,
+                                char**)) {
+  // Cast the function pointer to match the type expected by the struct
+  t->on_background_error_ =
+      reinterpret_cast<void (*)(void*, int, char**)>(on_background_error);
+}
+
+void rocksdb_event_listener_set_stall_conditions_changed(
+    rocksdb_event_listener_t* t,
+    void (*on_stall_conditions_changed)(void*,
+                                        const rocksdb_writestallinfo_t*)) {
+  t->on_stall_conditions_changed_ = on_stall_conditions_changed;
+}
+
+void rocksdb_event_listener_set_file_read_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_read_finish)(void*, const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_read_finish_ = on_file_read_finish;
+}
+
+void rocksdb_event_listener_set_file_write_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_write_finish)(void*, const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_write_finish_ = on_file_write_finish;
+}
+
+void rocksdb_event_listener_set_file_flush_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_flush_finish)(void*, const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_flush_finish_ = on_file_flush_finish;
+}
+
+void rocksdb_event_listener_set_file_sync_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_sync_finish)(void*, const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_sync_finish_ = on_file_sync_finish;
+}
+
+void rocksdb_event_listener_set_file_range_sync_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_range_sync_finish)(void*,
+                                      const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_range_sync_finish_ = on_file_range_sync_finish;
+}
+
+void rocksdb_event_listener_set_file_truncate_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_truncate_finish)(void*,
+                                    const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_truncate_finish_ = on_file_truncate_finish;
+}
+
+void rocksdb_event_listener_set_file_close_finish(
+    rocksdb_event_listener_t* t,
+    void (*on_file_close_finish)(void*, const rocksdb_fileoperationinfo_t*)) {
+  t->on_file_close_finish_ = on_file_close_finish;
+}
+
+void rocksdb_event_listener_set_should_be_notified_on_file_io(
+    rocksdb_event_listener_t* t,
+    unsigned char (*should_be_notified_on_file_io)(void*)) {
+  t->should_be_notified_on_file_io_ = should_be_notified_on_file_io;
+}
+
+void rocksdb_event_listener_set_error_recovery_begin(
+    rocksdb_event_listener_t* t,
+    void (*on_error_recovery_begin)(void*, rocksdb_backgrounderrorreason_t,
+                                    const char*, unsigned char*)) {
+  // Cast the function pointer to match the type expected by the struct
+  t->on_error_recovery_begin_ =
+      reinterpret_cast<void (*)(void*, int, const char*, unsigned char*)>(
+          on_error_recovery_begin);
+}
+
+void rocksdb_event_listener_set_error_recovery_end(
+    rocksdb_event_listener_t* t,
+    void (*on_error_recovery_end)(
+        void*, const rocksdb_backgrounderrorrecoveryinfo_t*)) {
+  t->on_error_recovery_end_ = on_error_recovery_end;
+}
+
+void rocksdb_event_listener_set_blob_file_creation_started(
+    rocksdb_event_listener_t* t,
+    void (*on_blob_file_creation_started)(
+        void*, const rocksdb_blobfilecreationbriefinfo_t*)) {
+  t->on_blob_file_creation_started_ = on_blob_file_creation_started;
+}
+
+void rocksdb_event_listener_set_blob_file_created(
+    rocksdb_event_listener_t* t,
+    void (*on_blob_file_created)(void*,
+                                 const rocksdb_blobfilecreationinfo_t*)) {
+  t->on_blob_file_created_ = on_blob_file_created;
+}
+
+void rocksdb_event_listener_set_blob_file_deleted(
+    rocksdb_event_listener_t* t,
+    void (*on_blob_file_deleted)(void*,
+                                 const rocksdb_blobfiledeletioninfo_t*)) {
+  t->on_blob_file_deleted_ = on_blob_file_deleted;
+}
+
+void rocksdb_event_listener_set_manual_flush_scheduled(
+    rocksdb_event_listener_t* t,
+    void (*on_manual_flush_scheduled)(void*, rocksdb_t*,
+                                      const rocksdb_manualflushinfo_t*)) {
+  t->on_manual_flush_scheduled_ = on_manual_flush_scheduled;
+}
+
+void rocksdb_event_listener_set_io_error(
+    rocksdb_event_listener_t* t,
+    void (*on_io_error)(void*, const rocksdb_ioerrorinfo_t*)) {
+  t->on_io_error_ = on_io_error;
+}
+
+void rocksdb_options_add_event_listener(
+    rocksdb_options_t* options, rocksdb_event_listener_t* event_listener) {
+  std::shared_ptr<EventListener> el(event_listener);
+  options->rep.listeners.emplace_back(el);
+}
+
+const char* rocksdb_flushinfo_cf_name(const rocksdb_flushinfo_t* info) {
+  auto flush_job_info = reinterpret_cast<const FlushJobInfo*>(info);
+  return strdup(flush_job_info->cf_name.c_str());
+}
 
 struct rocksdb_filterpolicy_t : public FilterPolicy {
   void* state_;
