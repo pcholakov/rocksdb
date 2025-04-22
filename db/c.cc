@@ -24,6 +24,7 @@
 #include "rocksdb/experimental.h"
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/iterator.h"
+#include "rocksdb/listener.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/options.h"
@@ -76,9 +77,11 @@ using ROCKSDB_NAMESPACE::DBOptions;
 using ROCKSDB_NAMESPACE::DbPath;
 using ROCKSDB_NAMESPACE::Env;
 using ROCKSDB_NAMESPACE::EnvOptions;
+using ROCKSDB_NAMESPACE::EventListener;
 using ROCKSDB_NAMESPACE::ExportImportFilesMetaData;
 using ROCKSDB_NAMESPACE::FileLock;
 using ROCKSDB_NAMESPACE::FilterPolicy;
+using ROCKSDB_NAMESPACE::FlushJobInfo;
 using ROCKSDB_NAMESPACE::FlushOptions;
 using ROCKSDB_NAMESPACE::HistogramData;
 using ROCKSDB_NAMESPACE::HyperClockCacheOptions;
@@ -406,6 +409,81 @@ struct rocksdb_comparator_t : public Comparator {
   void FindShortestSeparator(std::string*, const Slice&) const override {}
   void FindShortSuccessor(std::string* /*key*/) const override {}
 };
+
+struct rocksdb_flushjobinfo_t {
+  const FlushJobInfo* rep;
+};
+
+struct rocksdb_event_listener_t : public EventListener {
+  void* state_;
+  void (*destructor_)(void*);
+  const char* (*name_)(void*);
+  void (*on_flush_completed_)(void*, rocksdb_t* db,
+                              const rocksdb_flushjobinfo_t* info);
+
+  rocksdb_event_listener_t() : EventListener() {}
+
+  ~rocksdb_event_listener_t() override { (*destructor_)(state_); }
+
+  const char* Name() const override {
+    if (name_ != nullptr) {
+      return (*name_)(state_);
+    } else {
+      return this->Name();
+    }
+  }
+
+  void OnFlushCompleted(DB* db, const FlushJobInfo& flush_job_info) override {
+    if (on_flush_completed_) {
+      rocksdb_flushjobinfo_t info;
+      info.rep = &flush_job_info;
+      (*on_flush_completed_)(state_, reinterpret_cast<rocksdb_t*>(db), &info);
+    }
+  }
+};
+
+rocksdb_event_listener_t* rocksdb_event_listener_create(
+    void* state, void (*destructor_)(void*), const char* (*name)(void*)) {
+  rocksdb_event_listener_t* listener = new rocksdb_event_listener_t;
+  listener->state_ = state;
+  listener->destructor_ = destructor_;
+  listener->name_ = name;
+
+  listener->on_flush_completed_ = nullptr;
+
+  return listener;
+}
+
+void rocksdb_event_listener_destroy(rocksdb_event_listener_t* listener) { delete listener; }
+
+void rocksdb_event_listener_set_on_flush_completed(
+    rocksdb_event_listener_t* t,
+    void (*on_flush_completed)(void*, rocksdb_t*, const rocksdb_flushjobinfo_t*)) {
+  t->on_flush_completed_ = on_flush_completed;
+}
+
+const char* rocksdb_flushjobinfo_cf_name(const rocksdb_flushjobinfo_t* info) {
+  return strdup(info->rep->cf_name.c_str());
+}
+
+const char* rocksdb_flushjobinfo_file_path(const rocksdb_flushjobinfo_t* info) {
+  return strdup(info->rep->file_path.c_str());
+}
+
+uint64_t rocksdb_flushjobinfo_smallest_seqno(
+    const rocksdb_flushjobinfo_t* info) {
+  return info->rep->smallest_seqno;
+}
+
+uint64_t rocksdb_flushjobinfo_largest_seqno(
+    const rocksdb_flushjobinfo_t* info) {
+  return info->rep->largest_seqno;
+}
+
+rocksdb_flushreason_t rocksdb_flushjobinfo_flushreason(
+    const rocksdb_flushjobinfo_t* info) {
+  return static_cast<rocksdb_flushreason_t>(info->rep->flush_reason);
+}
 
 struct rocksdb_filterpolicy_t : public FilterPolicy {
   void* state_;
@@ -3154,6 +3232,12 @@ void rocksdb_options_set_comparator(rocksdb_options_t* opt,
 void rocksdb_options_set_merge_operator(
     rocksdb_options_t* opt, rocksdb_mergeoperator_t* merge_operator) {
   opt->rep.merge_operator = std::shared_ptr<MergeOperator>(merge_operator);
+}
+
+void rocksdb_options_add_event_listener(
+    rocksdb_options_t* options, rocksdb_event_listener_t* event_listener) {
+  std::shared_ptr<EventListener> el(event_listener);
+  options->rep.listeners.emplace_back(el);
 }
 
 void rocksdb_options_set_create_if_missing(rocksdb_options_t* opt,
