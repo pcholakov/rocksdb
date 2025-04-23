@@ -84,6 +84,17 @@ typedef struct rocksdb_compactionfiltercontext_t
     rocksdb_compactionfiltercontext_t;
 typedef struct rocksdb_compactionfilterfactory_t
     rocksdb_compactionfilterfactory_t;
+typedef struct rocksdb_table_properties_t rocksdb_table_properties_t;
+typedef struct rocksdb_user_collected_properties_t
+    rocksdb_user_collected_properties_t;
+typedef struct rocksdb_user_collected_properties_mut_t
+    rocksdb_user_collected_properties_mut_t;
+typedef struct rocksdb_table_properties_collector_t
+    rocksdb_table_properties_collector_t;
+typedef struct rocksdb_table_properties_collector_factory_context_t
+    rocksdb_table_properties_collector_context_t;
+typedef struct rocksdb_table_properties_collector_factory_t
+    rocksdb_table_properties_collector_factory_t;
 typedef struct rocksdb_comparator_t rocksdb_comparator_t;
 typedef struct rocksdb_event_listener_t rocksdb_event_listener_t;
 typedef struct rocksdb_dbpath_t rocksdb_dbpath_t;
@@ -1274,6 +1285,9 @@ rocksdb_flushjobinfo_largest_seqno(const rocksdb_flushjobinfo_t*);
 extern ROCKSDB_LIBRARY_API rocksdb_flushreason_t
 rocksdb_flushjobinfo_flushreason(const rocksdb_flushjobinfo_t*);
 
+extern ROCKSDB_LIBRARY_API const rocksdb_table_properties_t*
+rocksdb_flushjobinfo_table_properties(const rocksdb_flushjobinfo_t*);
+
 /* Merge Operator */
 
 extern ROCKSDB_LIBRARY_API void rocksdb_options_set_uint64add_merge_operator(
@@ -1835,6 +1849,65 @@ extern ROCKSDB_LIBRARY_API unsigned char rocksdb_options_get_atomic_flush(
 
 extern ROCKSDB_LIBRARY_API void rocksdb_options_set_row_cache(
     rocksdb_options_t* opt, rocksdb_cache_t* cache);
+
+extern ROCKSDB_LIBRARY_API rocksdb_table_properties_collector_factory_t*
+rocksdb_table_properties_collector_factory_create(
+    void* state, void (*destructor)(void*),
+    rocksdb_table_properties_collector_t* (*create_collector)(
+        void*, rocksdb_table_properties_collector_context_t*),
+    const char* (*name)(void*));
+
+extern ROCKSDB_LIBRARY_API void
+rocksdb_table_properties_collector_factory_destroy(
+    rocksdb_table_properties_collector_factory_t*);
+
+extern ROCKSDB_LIBRARY_API void
+rocksdb_options_add_table_properties_collector_factory(
+    rocksdb_options_t*, rocksdb_table_properties_collector_factory_t*);
+
+extern ROCKSDB_LIBRARY_API rocksdb_table_properties_collector_t*
+rocksdb_table_properties_collector_create(
+    void* state, void (*destructor)(void* state),
+    bool (*add_user_key)(void*, const char* key, size_t key_len,
+                         const char* value, size_t value_len, int entry_type,
+                         uint64_t sequence_number, uint64_t file_size),
+    void (*block_add)(void*, uint64_t, uint64_t, uint64_t),
+    bool (*finish)(void*, rocksdb_user_collected_properties_mut_t* properties),
+    void (*get_readable_properties)(
+        void*, rocksdb_user_collected_properties_mut_t* properties),
+    const char* (*name)(void*));
+
+extern ROCKSDB_LIBRARY_API uint32_t
+rocksdb_table_properties_collector_context_get_column_family_id(
+    rocksdb_table_properties_collector_context_t*);
+
+extern ROCKSDB_LIBRARY_API int
+rocksdb_table_properties_collector_context_get_level_at_creation(
+    rocksdb_table_properties_collector_context_t*);
+
+extern ROCKSDB_LIBRARY_API int
+rocksdb_table_properties_collector_context_get_num_levels(
+    rocksdb_table_properties_collector_context_t*);
+
+extern ROCKSDB_LIBRARY_API uint64_t
+rocksdb_table_properties_collector_context_get_last_level_inclusive_max_seqno_threshold(
+    rocksdb_table_properties_collector_context_t*);
+
+extern ROCKSDB_LIBRARY_API rocksdb_user_collected_properties_t*
+rocksdb_table_properties_get_user_collected_properties(
+    const rocksdb_table_properties_t*);
+
+extern ROCKSDB_LIBRARY_API void rocksdb_table_properties_destroy(
+    const rocksdb_table_properties_t*);
+
+extern ROCKSDB_LIBRARY_API void rocksdb_user_collected_properties_insert(
+    rocksdb_user_collected_properties_mut_t*, const char*, const char*);
+
+extern ROCKSDB_LIBRARY_API const char* rocksdb_user_collected_properties_get(
+    const rocksdb_user_collected_properties_t*, const char*);
+
+extern ROCKSDB_LIBRARY_API void rocksdb_user_collected_properties_destroy(
+    rocksdb_user_collected_properties_t*);
 
 extern ROCKSDB_LIBRARY_API void
 rocksdb_options_add_compact_on_deletion_collector_factory(

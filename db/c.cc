@@ -35,6 +35,7 @@
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
+#include "rocksdb/table_properties.h"
 #include "rocksdb/universal_compaction.h"
 #include "rocksdb/utilities/backup_engine.h"
 #include "rocksdb/utilities/checkpoint.h"
@@ -76,6 +77,7 @@ using ROCKSDB_NAMESPACE::CuckooTableOptions;
 using ROCKSDB_NAMESPACE::DB;
 using ROCKSDB_NAMESPACE::DBOptions;
 using ROCKSDB_NAMESPACE::DbPath;
+using ROCKSDB_NAMESPACE::EntryType;
 using ROCKSDB_NAMESPACE::Env;
 using ROCKSDB_NAMESPACE::EnvOptions;
 using ROCKSDB_NAMESPACE::EventListener;
@@ -114,6 +116,7 @@ using ROCKSDB_NAMESPACE::Range;
 using ROCKSDB_NAMESPACE::RateLimiter;
 using ROCKSDB_NAMESPACE::ReadOptions;
 using ROCKSDB_NAMESPACE::RestoreOptions;
+using ROCKSDB_NAMESPACE::SequenceNumber;
 using ROCKSDB_NAMESPACE::SequentialFile;
 using ROCKSDB_NAMESPACE::Slice;
 using ROCKSDB_NAMESPACE::SliceParts;
@@ -123,12 +126,16 @@ using ROCKSDB_NAMESPACE::SstFileMetaData;
 using ROCKSDB_NAMESPACE::SstFileWriter;
 using ROCKSDB_NAMESPACE::Status;
 using ROCKSDB_NAMESPACE::StderrLogger;
+using ROCKSDB_NAMESPACE::TableProperties;
+using ROCKSDB_NAMESPACE::TablePropertiesCollection;
+using ROCKSDB_NAMESPACE::TablePropertiesCollector;
 using ROCKSDB_NAMESPACE::TablePropertiesCollectorFactory;
 using ROCKSDB_NAMESPACE::Transaction;
 using ROCKSDB_NAMESPACE::TransactionDB;
 using ROCKSDB_NAMESPACE::TransactionDBOptions;
 using ROCKSDB_NAMESPACE::TransactionLogIterator;
 using ROCKSDB_NAMESPACE::TransactionOptions;
+using ROCKSDB_NAMESPACE::UserCollectedProperties;
 using ROCKSDB_NAMESPACE::WaitForCompactOptions;
 using ROCKSDB_NAMESPACE::WALRecoveryMode;
 using ROCKSDB_NAMESPACE::WritableFile;
@@ -345,6 +352,207 @@ struct rocksdb_compactionfilter_t : public CompactionFilter {
   bool IgnoreSnapshots() const override { return ignore_snapshots_; }
 };
 
+/* Table Properties */
+
+struct rocksdb_table_properties_t {
+  const TableProperties* rep;
+};
+
+struct rocksdb_table_properties_collector_factory_context_t {
+  TablePropertiesCollectorFactory::Context* rep;
+};
+
+struct rocksdb_user_collected_properties_t {
+  const UserCollectedProperties* rep;
+};
+
+struct rocksdb_user_collected_properties_mut_t {
+  UserCollectedProperties* rep;
+};
+
+// todo(pavel): support returning full Status from add/finish callbacks
+struct rocksdb_table_properties_collector_t : public TablePropertiesCollector {
+  void* state_;
+  void (*destructor_)(void*);
+  bool (*add_user_key_)(void*, const char* key, size_t key_len,
+                        const char* value, size_t value_len, int entry_type,
+                        uint64_t sequence_number, uint64_t file_size);
+  void (*block_add_)(void*, uint64_t, uint64_t, uint64_t);
+  bool (*finish_)(void*, rocksdb_user_collected_properties_mut_t* properties);
+  void (*get_readable_properties_)(
+      void*, rocksdb_user_collected_properties_mut_t* properties);
+  const char* (*name_)(void*);
+
+  ~rocksdb_table_properties_collector_t() override { (*destructor_)(state_); }
+
+  Status AddUserKey(const Slice& key, const Slice& value, EntryType entry_type,
+                    SequenceNumber seq, uint64_t file_size) override {
+    bool result = (*add_user_key_)(state_, key.data(), key.size(), value.data(),
+                                   value.size(), entry_type, seq, file_size);
+    if (result) {
+      return Status::OK();
+    } else {
+      return Status::Aborted();
+    }
+  }
+
+  void BlockAdd(uint64_t block_uncomp_bytes,
+                uint64_t block_compressed_bytes_fast,
+                uint64_t block_compressed_bytes_slow) override {
+    if (block_add_ != nullptr) {
+      (*block_add_)(state_, block_uncomp_bytes, block_compressed_bytes_fast,
+                 block_compressed_bytes_slow);
+    }
+  }
+
+  Status Finish(UserCollectedProperties* properties) override {
+    rocksdb_user_collected_properties_mut_t user_collected_properties;
+    user_collected_properties.rep = properties;
+    bool result = (*finish_)(state_, &user_collected_properties);
+    if (result) {
+      return Status::OK();
+    } else {
+      return Status::Aborted();
+    }
+  }
+
+  UserCollectedProperties GetReadableProperties() const override {
+    UserCollectedProperties properties;
+    rocksdb_user_collected_properties_mut_t user_collected_properties;
+    user_collected_properties.rep = &properties;
+    (*get_readable_properties_)(state_, &user_collected_properties);
+    return properties;
+  }
+
+  const char* Name() const override { return (*name_)(state_); }
+};
+
+struct rocksdb_table_properties_collector_factory_t
+    : public TablePropertiesCollectorFactory {
+  void* state_;
+  void (*destructor_)(void*);
+  rocksdb_table_properties_collector_t* (*create_table_properties_collector_)(
+      void*, rocksdb_table_properties_collector_context_t*);
+  const char* (*name_)(void*);
+
+  ~rocksdb_table_properties_collector_factory_t() override {
+    (*destructor_)(state_);
+  }
+
+  TablePropertiesCollector* CreateTablePropertiesCollector(
+      TablePropertiesCollectorFactory::Context context) override {
+    rocksdb_table_properties_collector_context_t context_;
+    context_.rep = &context;
+    return (*create_table_properties_collector_)(state_, &context_);
+  }
+
+  const char* Name() const override { return (*name_)(state_); }
+};
+
+uint32_t rocksdb_table_properties_collector_context_get_column_family_id(
+    rocksdb_table_properties_collector_context_t* context) {
+  return context->rep->column_family_id;
+}
+
+int rocksdb_table_properties_collector_context_get_level_at_creation(
+    rocksdb_table_properties_collector_context_t* context) {
+  return context->rep->level_at_creation;
+}
+
+int rocksdb_table_properties_collector_context_get_num_levels(
+    rocksdb_table_properties_collector_context_t* context) {
+  return context->rep->num_levels;
+}
+
+uint64_t
+rocksdb_table_properties_collector_context_get_last_level_inclusive_max_seqno_threshold(
+    rocksdb_table_properties_collector_context_t* context) {
+  return context->rep->last_level_inclusive_max_seqno_threshold;
+}
+
+rocksdb_table_properties_collector_factory_t*
+rocksdb_table_properties_collector_factory_create(
+    void* state, void (*destructor)(void* state),
+    rocksdb_table_properties_collector_t* (*create_collector_callback)(
+        void* state, rocksdb_table_properties_collector_context_t* context),
+    const char* (*name)(void*)) {
+  rocksdb_table_properties_collector_factory_t* collector_factory =
+      new rocksdb_table_properties_collector_factory_t;
+
+  collector_factory->state_ = state;
+  collector_factory->destructor_ = destructor;
+  collector_factory->create_table_properties_collector_ =
+      create_collector_callback;
+  collector_factory->name_ = name;
+
+  return collector_factory;
+}
+
+void rocksdb_table_properties_collector_factory_destroy(
+    rocksdb_table_properties_collector_factory_t* collector_factory) {
+  return delete collector_factory;
+}
+
+rocksdb_table_properties_collector_t* rocksdb_table_properties_collector_create(
+    void* state, void (*destructor)(void* state),
+    bool (*add_user_key)(void*, const char* key, size_t key_len,
+                         const char* value, size_t value_len, int entry_type,
+                         uint64_t sequence_number, uint64_t file_size),
+    void (*block_add)(void*, uint64_t, uint64_t, uint64_t),
+    bool (*finish)(void*, rocksdb_user_collected_properties_mut_t* properties),
+    void (*get_readable_properties)(
+        void*, rocksdb_user_collected_properties_mut_t* properties),
+    const char* (*name)(void*)) {
+  rocksdb_table_properties_collector_t* collector =
+      new rocksdb_table_properties_collector_t;
+
+  collector->state_ = state;
+  collector->destructor_ = destructor;
+  collector->add_user_key_ = add_user_key;
+  collector->block_add_ = block_add;
+  collector->finish_ = finish;
+  collector->get_readable_properties_ = get_readable_properties;
+  collector->name_ = name;
+
+  return collector;
+}
+
+rocksdb_user_collected_properties_t*
+rocksdb_table_properties_get_user_collected_properties(
+    const rocksdb_table_properties_t* table_properties) {
+  auto user_collected_properties = new rocksdb_user_collected_properties_t;
+  user_collected_properties->rep = const_cast<UserCollectedProperties*>(
+      &table_properties->rep->user_collected_properties);
+  return user_collected_properties;
+}
+
+void rocksdb_table_properties_destroy(
+    const rocksdb_table_properties_t* table_properties) {
+  delete table_properties;
+}
+
+const char* rocksdb_user_collected_properties_get(
+    const rocksdb_user_collected_properties_t* properties, const char* key) {
+  auto it = properties->rep->find(std::string(key));
+  if (it != properties->rep->end()) {
+    return strdup(it->second.c_str());
+  }
+  return nullptr;
+}
+
+void rocksdb_user_collected_properties_destroy(
+    rocksdb_user_collected_properties_t* user_collected_properties) {
+  delete user_collected_properties;
+}
+
+void rocksdb_user_collected_properties_insert(
+    rocksdb_user_collected_properties_mut_t* properties, const char* key,
+    const char* value) {
+  properties->rep->emplace(std::string(key), std::string(value));
+}
+
+/* Compaction Filter Factory */
+
 struct rocksdb_compactionfilterfactory_t : public CompactionFilterFactory {
   void* state_;
   void (*destructor_)(void*);
@@ -492,6 +700,13 @@ uint64_t rocksdb_flushjobinfo_largest_seqno(
 rocksdb_flushreason_t rocksdb_flushjobinfo_flushreason(
     const rocksdb_flushjobinfo_t* info) {
   return static_cast<rocksdb_flushreason_t>(info->rep->flush_reason);
+}
+
+const rocksdb_table_properties_t* rocksdb_flushjobinfo_table_properties(
+    const rocksdb_flushjobinfo_t* info) {
+  auto table_properties = new rocksdb_table_properties_t;
+  table_properties->rep = &info->rep->table_properties;
+  return table_properties;
 }
 
 struct rocksdb_filterpolicy_t : public FilterPolicy {
@@ -3256,6 +3471,13 @@ void rocksdb_options_remove_event_listener(
       listeners.end());
 }
 
+void rocksdb_options_add_table_properties_collector_factory(
+    rocksdb_options_t* options,
+    rocksdb_table_properties_collector_factory_t* factory) {
+  options->rep.table_properties_collector_factories.emplace_back(
+      std::shared_ptr<TablePropertiesCollectorFactory>(factory));
+}
+
 void rocksdb_options_set_create_if_missing(rocksdb_options_t* opt,
                                            unsigned char v) {
   opt->rep.create_if_missing = v;
@@ -4672,7 +4894,6 @@ DB::GetOptions
 DB::GetSortedWalFiles
 DB::RunManualCompaction
 custom cache
-table_properties_collectors
 */
 
 rocksdb_compactionfilter_t* rocksdb_compactionfilter_create(
