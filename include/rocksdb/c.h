@@ -1229,37 +1229,17 @@ extern ROCKSDB_LIBRARY_API void rocksdb_options_add_event_listener(
 /* Event Listener */
 
 typedef struct rocksdb_flushjobinfo_t rocksdb_flushjobinfo_t;
-
 typedef int rocksdb_flushreason_t;
-enum {
-  rocksdb_flushreason_others = 0x00,
-  rocksdb_flushreason_get_live_files = 0x01,
-  rocksdb_flushreason_shut_down = 0x02,
-  rocksdb_flushreason_external_file_ingestion = 0x03,
-  rocksdb_flushreason_manual_compaction = 0x04,
-  rocksdb_flushreason_write_buffer_manager = 0x05,
-  rocksdb_flushreason_write_buffer_full = 0x06,
-  rocksdb_flushreason_test = 0x07,
-  rocksdb_flushreason_delete_files = 0x08,
-  rocksdb_flushreason_auto_compaction = 0x09,
-  rocksdb_flushreason_manual_flush = 0x0a,
-  rocksdb_flushreason_error_recovery = 0x0b,
-  rocksdb_flushreason_error_recovery_retry_flush = 0x0c,
-  rocksdb_flushreason_wal_full = 0x0d,
-  rocksdb_flushreason_catch_up_after_error_recovery = 0x0e
-};
 
 extern ROCKSDB_LIBRARY_API rocksdb_event_listener_t*
-rocksdb_event_listener_create(void*, void (*destructor_)(void*),
-                              const char* (*name)(void*));
+rocksdb_event_listener_create(void*, void (*destructor_)(void*));
 
 extern ROCKSDB_LIBRARY_API void rocksdb_event_listener_destroy(
     rocksdb_event_listener_t*);
 
 extern ROCKSDB_LIBRARY_API void rocksdb_event_listener_set_on_flush_completed(
     rocksdb_event_listener_t*,
-    void (*on_flush_completed)(void*, rocksdb_t*,
-                               const rocksdb_flushjobinfo_t*));
+    void (*on_flush_completed)(void*, const rocksdb_flushjobinfo_t*));
 
 extern ROCKSDB_LIBRARY_API const char* rocksdb_flushjobinfo_cf_name(
     const rocksdb_flushjobinfo_t*);
