@@ -1250,16 +1250,14 @@ enum {
 };
 
 extern ROCKSDB_LIBRARY_API rocksdb_event_listener_t*
-rocksdb_event_listener_create(void*, void (*destructor_)(void*),
-                              const char* (*name)(void*));
+rocksdb_event_listener_create(void*, void (*destructor_)(void*));
 
 extern ROCKSDB_LIBRARY_API void rocksdb_event_listener_destroy(
     rocksdb_event_listener_t*);
 
 extern ROCKSDB_LIBRARY_API void rocksdb_event_listener_set_on_flush_completed(
     rocksdb_event_listener_t*,
-    void (*on_flush_completed)(void*, rocksdb_t*,
-                               const rocksdb_flushjobinfo_t*));
+    void (*on_flush_completed)(void*, const rocksdb_flushjobinfo_t*));
 
 extern ROCKSDB_LIBRARY_API const char* rocksdb_flushjobinfo_cf_name(
     const rocksdb_flushjobinfo_t*);

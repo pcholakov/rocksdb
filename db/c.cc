@@ -11,6 +11,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -414,60 +415,68 @@ struct rocksdb_flushjobinfo_t {
   const FlushJobInfo* rep;
 };
 
-struct rocksdb_event_listener_t : public EventListener {
+struct rocksdb_event_listener_inner_t : public EventListener {
   void* state_;
   void (*destructor_)(void*);
-  const char* (*name_)(void*);
-  void (*on_flush_completed_)(void*, rocksdb_t* db,
-                              const rocksdb_flushjobinfo_t* info);
+  void (*on_flush_completed_)(void*, const rocksdb_flushjobinfo_t* info);
 
-  rocksdb_event_listener_t() : EventListener() {}
+  rocksdb_event_listener_inner_t(void* state, void (*destructor)(void*))
+      : EventListener() {
+    state_ = state;
+    destructor_ = destructor;
+    on_flush_completed_ = nullptr;
+  }
 
-  ~rocksdb_event_listener_t() override { (*destructor_)(state_); }
-
-  const char* Name() const override {
-    if (name_ != nullptr) {
-      return (*name_)(state_);
-    } else {
-      return this->Name();
+  ~rocksdb_event_listener_inner_t() override {
+    if (destructor_ != nullptr) {
+      (*destructor_)(state_);
     }
   }
 
-  void OnFlushCompleted(DB* db, const FlushJobInfo& flush_job_info) override {
-    if (on_flush_completed_) {
+  void OnFlushCompleted(DB*, const FlushJobInfo& flush_job_info) override {
+    if (on_flush_completed_ != nullptr) {
       rocksdb_flushjobinfo_t info;
       info.rep = &flush_job_info;
-      (*on_flush_completed_)(state_, reinterpret_cast<rocksdb_t*>(db), &info);
+      (*on_flush_completed_)(state_, &info);
     }
   }
 };
 
+// This struct is the primary owner of the listener implementation pointer,
+// a copy of which is passed to RocksDB to register the listener.
+// Its lifetime must be tied to the respective lifetime of a FFI-side listener
+// delegate - dropping the delegate should invoke
+// rocksdb_event_listener_destroy.
+struct rocksdb_event_listener_t {
+  std::shared_ptr<rocksdb_event_listener_inner_t> inner_;
+
+  rocksdb_event_listener_t(void* state, void (*destructor)(void*)) {
+    auto inner = new rocksdb_event_listener_inner_t(state, destructor);
+    inner_ = std::shared_ptr<rocksdb_event_listener_inner_t>(inner);
+  }
+};
+
 rocksdb_event_listener_t* rocksdb_event_listener_create(
-    void* state, void (*destructor_)(void*), const char* (*name)(void*)) {
-  rocksdb_event_listener_t* listener = new rocksdb_event_listener_t;
-  listener->state_ = state;
-  listener->destructor_ = destructor_;
-  listener->name_ = name;
-
-  listener->on_flush_completed_ = nullptr;
-
-  return listener;
+    void* state, void (*destructor)(void*)) {
+  return new rocksdb_event_listener_t(state, destructor);
 }
-
-void rocksdb_event_listener_destroy(rocksdb_event_listener_t* listener) { delete listener; }
 
 void rocksdb_event_listener_set_on_flush_completed(
     rocksdb_event_listener_t* t,
-    void (*on_flush_completed)(void*, rocksdb_t*, const rocksdb_flushjobinfo_t*)) {
-  t->on_flush_completed_ = on_flush_completed;
+    void (*on_flush_completed)(void*, const rocksdb_flushjobinfo_t*)) {
+  t->inner_->on_flush_completed_ = on_flush_completed;
+}
+
+void rocksdb_event_listener_destroy(rocksdb_event_listener_t* listener) {
+  delete listener;
 }
 
 const char* rocksdb_flushjobinfo_cf_name(const rocksdb_flushjobinfo_t* info) {
-  return strdup(info->rep->cf_name.c_str());
+  return info->rep->cf_name.c_str();
 }
 
 const char* rocksdb_flushjobinfo_file_path(const rocksdb_flushjobinfo_t* info) {
-  return strdup(info->rep->file_path.c_str());
+  return info->rep->file_path.c_str();
 }
 
 uint64_t rocksdb_flushjobinfo_smallest_seqno(
@@ -3236,8 +3245,15 @@ void rocksdb_options_set_merge_operator(
 
 void rocksdb_options_add_event_listener(
     rocksdb_options_t* options, rocksdb_event_listener_t* event_listener) {
-  std::shared_ptr<EventListener> el(event_listener);
-  options->rep.listeners.emplace_back(el);
+  options->rep.listeners.emplace_back(event_listener->inner_);
+}
+
+void rocksdb_options_remove_event_listener(
+    rocksdb_options_t* options, rocksdb_event_listener_t* event_listener) {
+  auto& listeners = options->rep.listeners;
+  listeners.erase(
+      std::remove(listeners.begin(), listeners.end(), event_listener->inner_),
+      listeners.end());
 }
 
 void rocksdb_options_set_create_if_missing(rocksdb_options_t* opt,
