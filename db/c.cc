@@ -400,7 +400,7 @@ struct rocksdb_table_properties_collector_t : public TablePropertiesCollector {
                 uint64_t block_compressed_bytes_slow) override {
     if (block_add_ != nullptr) {
       (*block_add_)(state_, block_uncomp_bytes, block_compressed_bytes_fast,
-                 block_compressed_bytes_slow);
+                    block_compressed_bytes_slow);
     }
   }
 
@@ -467,53 +467,6 @@ uint64_t
 rocksdb_table_properties_collector_context_get_last_level_inclusive_max_seqno_threshold(
     rocksdb_table_properties_collector_context_t* context) {
   return context->rep->last_level_inclusive_max_seqno_threshold;
-}
-
-rocksdb_table_properties_collector_factory_t*
-rocksdb_table_properties_collector_factory_create(
-    void* state, void (*destructor)(void* state),
-    rocksdb_table_properties_collector_t* (*create_collector_callback)(
-        void* state, rocksdb_table_properties_collector_context_t* context),
-    const char* (*name)(void*)) {
-  rocksdb_table_properties_collector_factory_t* collector_factory =
-      new rocksdb_table_properties_collector_factory_t;
-
-  collector_factory->state_ = state;
-  collector_factory->destructor_ = destructor;
-  collector_factory->create_table_properties_collector_ =
-      create_collector_callback;
-  collector_factory->name_ = name;
-
-  return collector_factory;
-}
-
-void rocksdb_table_properties_collector_factory_destroy(
-    rocksdb_table_properties_collector_factory_t* collector_factory) {
-  return delete collector_factory;
-}
-
-rocksdb_table_properties_collector_t* rocksdb_table_properties_collector_create(
-    void* state, void (*destructor)(void* state),
-    bool (*add_user_key)(void*, const char* key, size_t key_len,
-                         const char* value, size_t value_len, int entry_type,
-                         uint64_t sequence_number, uint64_t file_size),
-    void (*block_add)(void*, uint64_t, uint64_t, uint64_t),
-    bool (*finish)(void*, rocksdb_user_collected_properties_mut_t* properties),
-    void (*get_readable_properties)(
-        void*, rocksdb_user_collected_properties_mut_t* properties),
-    const char* (*name)(void*)) {
-  rocksdb_table_properties_collector_t* collector =
-      new rocksdb_table_properties_collector_t;
-
-  collector->state_ = state;
-  collector->destructor_ = destructor;
-  collector->add_user_key_ = add_user_key;
-  collector->block_add_ = block_add;
-  collector->finish_ = finish;
-  collector->get_readable_properties_ = get_readable_properties;
-  collector->name_ = name;
-
-  return collector;
 }
 
 rocksdb_user_collected_properties_t*
@@ -3459,9 +3412,44 @@ void rocksdb_options_add_event_listener(
   options->rep.listeners.emplace_back(event_listener->inner_);
 }
 
+rocksdb_table_properties_collector_t* rocksdb_table_properties_collector_create(
+    void* state, void (*destructor)(void* state),
+    bool (*add_user_key)(void*, const char* key, size_t key_len,
+                         const char* value, size_t value_len, int entry_type,
+                         uint64_t sequence_number, uint64_t file_size),
+    void (*block_add)(void*, uint64_t, uint64_t, uint64_t),
+    bool (*finish)(void*, rocksdb_user_collected_properties_mut_t* properties),
+    void (*get_readable_properties)(
+        void*, rocksdb_user_collected_properties_mut_t* properties),
+    const char* (*name)(void*)) {
+  rocksdb_table_properties_collector_t* collector =
+      new rocksdb_table_properties_collector_t;
+
+  collector->state_ = state;
+  collector->destructor_ = destructor;
+  collector->add_user_key_ = add_user_key;
+  collector->block_add_ = block_add;
+  collector->finish_ = finish;
+  collector->get_readable_properties_ = get_readable_properties;
+  collector->name_ = name;
+
+  return collector;
+}
+
 void rocksdb_options_add_table_properties_collector_factory(
-    rocksdb_options_t* options,
-    rocksdb_table_properties_collector_factory_t* factory) {
+    rocksdb_options_t* options, void* state, void (*destructor)(void* state),
+    const char* (*name)(void*),
+    rocksdb_table_properties_collector_t* (*create_collector)(
+        void* state, rocksdb_table_properties_collector_context_t* context)) {
+  rocksdb_table_properties_collector_factory_t* factory =
+      new rocksdb_table_properties_collector_factory_t;
+
+  factory->state_ = state;
+  factory->destructor_ = destructor;
+  factory->create_table_properties_collector_ = create_collector;
+  factory->name_ = name;
+
+  // Transfer ownership of the factory wrapper to RocksDB
   options->rep.table_properties_collector_factories.emplace_back(
       std::shared_ptr<TablePropertiesCollectorFactory>(factory));
 }

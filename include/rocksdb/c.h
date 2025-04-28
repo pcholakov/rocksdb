@@ -93,8 +93,6 @@ typedef struct rocksdb_table_properties_collector_t
     rocksdb_table_properties_collector_t;
 typedef struct rocksdb_table_properties_collector_factory_context_t
     rocksdb_table_properties_collector_context_t;
-typedef struct rocksdb_table_properties_collector_factory_t
-    rocksdb_table_properties_collector_factory_t;
 typedef struct rocksdb_comparator_t rocksdb_comparator_t;
 typedef struct rocksdb_event_listener_t rocksdb_event_listener_t;
 typedef struct rocksdb_dbpath_t rocksdb_dbpath_t;
@@ -1832,20 +1830,12 @@ extern ROCKSDB_LIBRARY_API unsigned char rocksdb_options_get_atomic_flush(
 extern ROCKSDB_LIBRARY_API void rocksdb_options_set_row_cache(
     rocksdb_options_t* opt, rocksdb_cache_t* cache);
 
-extern ROCKSDB_LIBRARY_API rocksdb_table_properties_collector_factory_t*
-rocksdb_table_properties_collector_factory_create(
-    void* state, void (*destructor)(void*),
-    rocksdb_table_properties_collector_t* (*create_collector)(
-        void*, rocksdb_table_properties_collector_context_t*),
-    const char* (*name)(void*));
-
-extern ROCKSDB_LIBRARY_API void
-rocksdb_table_properties_collector_factory_destroy(
-    rocksdb_table_properties_collector_factory_t*);
-
 extern ROCKSDB_LIBRARY_API void
 rocksdb_options_add_table_properties_collector_factory(
-    rocksdb_options_t*, rocksdb_table_properties_collector_factory_t*);
+    rocksdb_options_t* options, void* state, void (*destructor)(void* state),
+    const char* (*name)(void*),
+    rocksdb_table_properties_collector_t* (*create_collector)(
+        void* state, rocksdb_table_properties_collector_context_t* context));
 
 extern ROCKSDB_LIBRARY_API rocksdb_table_properties_collector_t*
 rocksdb_table_properties_collector_create(
