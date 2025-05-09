@@ -1981,6 +1981,10 @@ rocksdb_table_properties_collector_context_get_last_level_inclusive_max_seqno_th
 extern ROCKSDB_LIBRARY_API const char*
 rocksdb_table_properties_get_user_collected_property(
     const rocksdb_table_properties_t* table_properties, const char* key);
+extern ROCKSDB_LIBRARY_API const char**
+rocksdb_table_properties_get_user_collected_property_keys(
+    const rocksdb_table_properties_t* table_properties, const char* prefix,
+    size_t* key_count);
 extern ROCKSDB_LIBRARY_API void rocksdb_table_properties_destroy(
     const rocksdb_table_properties_t*);
 

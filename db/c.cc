@@ -536,12 +536,41 @@ rocksdb_table_properties_collector_context_get_last_level_inclusive_max_seqno_th
 
 const char* rocksdb_table_properties_get_user_collected_property(
     const rocksdb_table_properties_t* table_properties, const char* key) {
-  auto properties = table_properties->rep->user_collected_properties;
-  auto it = properties.find(std::string(key));
+  const UserCollectedProperties& properties =
+      table_properties->rep->user_collected_properties;
+  auto it = properties.find(key);
   if (it != properties.end()) {
-    return strdup(it->second.c_str());
+    return it->second.c_str();
   }
   return nullptr;
+}
+
+const char** rocksdb_table_properties_get_user_collected_property_keys(
+    const rocksdb_table_properties_t* table_properties, const char* prefix,
+    size_t* key_count) {
+  const UserCollectedProperties& properties =
+      table_properties->rep->user_collected_properties;
+
+  std::vector<const char*> matches;
+  for (auto pos = properties.lower_bound(prefix);
+       pos != properties.end() &&
+       pos->first.compare(0, strlen(prefix), prefix) == 0;
+       ++pos) {
+    matches.push_back(pos->first.c_str());
+  }
+
+  *key_count = matches.size();
+
+  if (matches.empty()) {
+    return nullptr;
+  }
+
+  const char** keys =
+      static_cast<const char**>(malloc(matches.size() * sizeof(char*)));
+  for (size_t i = 0; i < matches.size(); i++) {
+    keys[i] = matches[i];
+  }
+  return keys;
 }
 
 void rocksdb_table_properties_destroy(
