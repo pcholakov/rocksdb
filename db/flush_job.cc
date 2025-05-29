@@ -220,9 +220,12 @@ void FlushJob::PickMemTable() {
   base_->Ref();  // it is likely that we do not need this reference
 }
 
+/// (PPT) The actual flush / SST write process
 Status FlushJob::Run(LogsWithPrepTracker* prep_tracker, FileMetaData* file_meta,
                      bool* switched_to_mempurge, bool* skipped_since_bg_error,
                      ErrorHandler* error_handler) {
+  ROCKS_LOG_INFO(db_options_.info_log, "FlushJob::START %llu",
+                 file_meta->fd.GetNumber());
   TEST_SYNC_POINT("FlushJob::Start");
   db_mutex_->AssertHeld();
   assert(pick_memtable_called);
@@ -327,7 +330,10 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker, FileMetaData* file_meta,
       }
     } else {
       TEST_SYNC_POINT("FlushJob::InstallResults");
-      // Replace immutable memtable with the generated Table
+      // Replace immutable memtable with the generated Table (PPT)
+      ROCKS_LOG_INFO(db_options_.info_log,
+                     "[%s] TryInstallMemtableFlushResults::START",
+                     cfd_->GetName().c_str());
       s = cfd_->imm()->TryInstallMemtableFlushResults(
               cfd_, mems_, prep_tracker, versions_, db_mutex_,
               meta_.fd.GetNumber(), &job_context_->memtables_to_free, db_directory_,
@@ -335,6 +341,9 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker, FileMetaData* file_meta,
               !(mempurge_s.ok()) /* write_edit : true if no mempurge happened (or if aborted),
                               but 'false' if mempurge successful: no new min log number
                               or new level 0 file path to write to manifest. */);
+      ROCKS_LOG_INFO(db_options_.info_log,
+                     "[%s] TryInstallMemtableFlushResults::END",
+                     cfd_->GetName().c_str());
     }
   }
 
@@ -383,6 +392,7 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker, FileMetaData* file_meta,
            << (IOSTATS(cpu_read_nanos) - prev_cpu_read_nanos);
   }
 
+  ROCKS_LOG_INFO(db_options_.info_log, "FlushJob::End");
   TEST_SYNC_POINT("FlushJob::End");
   return s;
 }
@@ -850,6 +860,7 @@ bool FlushJob::MemPurgeDecider(double threshold) {
           threshold);
 }
 
+/// (PPT) inner write SST file
 Status FlushJob::WriteLevel0Table() {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_FLUSH_WRITE_L0);

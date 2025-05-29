@@ -512,6 +512,7 @@ void MemTableList::RollbackMemtableFlush(
   }
 }
 
+/// (PPT)
 // Try record a successful flush in the manifest file. It might just return
 // Status::OK letting a concurrent flush to do actual the recording..
 Status MemTableList::TryInstallMemtableFlushResults(

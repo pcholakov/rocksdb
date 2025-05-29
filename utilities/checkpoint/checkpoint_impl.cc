@@ -340,7 +340,11 @@ Status CheckpointImpl::ExportColumnFamily(
   s = db_->GetEnv()->CreateDir(tmp_export_dir);
 
   if (s.ok()) {
+    ROCKS_LOG_INFO(db_options.info_log, "[%s] Before flush request",
+                   cf_name.c_str());
     s = db_->Flush(ROCKSDB_NAMESPACE::FlushOptions(), handle);
+    ROCKS_LOG_INFO(db_options.info_log, "[%s] After flush request",
+                   cf_name.c_str());
   }
 
   ColumnFamilyMetaData db_metadata;
@@ -348,7 +352,19 @@ Status CheckpointImpl::ExportColumnFamily(
     // Export live sst files with file deletions disabled.
     s = db_->DisableFileDeletions();
     if (s.ok()) {
+      // PPT: this is where we grab the metadata
+
+      auto version_before = cfh->cfd()->GetSuperVersionNumber();
+      ROCKS_LOG_INFO(db_options.info_log,
+                     "[%s] Got metadata version before=%lld", cf_name.c_str(),
+                     version_before);
+
       db_->GetColumnFamilyMetaData(handle, &db_metadata);
+      auto version_after = cfh->cfd()->GetSuperVersionNumber();
+
+      ROCKS_LOG_INFO(db_options.info_log,
+                     "[%s] Got metadata version after=%lld (before=%lld)",
+                     cf_name.c_str(), version_after, version_before);
 
       s = ExportFilesInMetaData(
           db_options, db_metadata,

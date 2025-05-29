@@ -7,7 +7,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
+#include <cstdint>
+#include <cstdio>
 #include <deque>
+#include <string>
 
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
@@ -270,7 +273,7 @@ Status DBImpl::FlushMemTableToOutputFile(
   }
 
   if (s.ok()) {
-    flush_job.PickMemTable();
+    flush_job.PickMemTable();  // <-
     need_cancel = true;
   }
   TEST_SYNC_POINT_CALLBACK(
@@ -363,6 +366,8 @@ Status DBImpl::FlushMemTableToOutputFile(
     // may temporarily unlock and lock the mutex.
     NotifyOnFlushCompleted(cfd, mutable_cf_options,
                            flush_job.GetCommittedFlushJobsInfo());
+    // (PPT) We know from our flush listener that the SST file exists on disk at
+    // this point!
     auto sfm = static_cast<SstFileManagerImpl*>(
         immutable_db_options_.sst_file_manager.get());
     if (sfm) {
@@ -408,6 +413,7 @@ Status DBImpl::FlushMemTablesToOutputFiles(
   SuperVersionContext* superversion_context =
       bg_flush_arg.superversion_context_;
   FlushReason flush_reason = bg_flush_arg.flush_reason_;
+  /// (PPT) Writes SSTs on flush
   Status s = FlushMemTableToOutputFile(
       cfd, mutable_cf_options_copy, made_progress, job_context, flush_reason,
       superversion_context, snapshot_seqs, earliest_write_conflict_snapshot,
@@ -1108,6 +1114,7 @@ Status DBImpl::CompactRangeInternal(const CompactRangeOptions& options,
     if (immutable_db_options_.atomic_flush) {
       s = AtomicFlushMemTables(fo, FlushReason::kManualCompaction);
     } else {
+      // non-atomic flush - should be the default for us
       s = FlushMemTable(cfd, fo, FlushReason::kManualCompaction);
     }
     if (!s.ok()) {
@@ -1960,19 +1967,26 @@ Status DBImpl::FlushAllColumnFamilies(const FlushOptions& flush_options,
 Status DBImpl::Flush(const FlushOptions& flush_options,
                      ColumnFamilyHandle* column_family) {
   auto cfh = static_cast_with_check<ColumnFamilyHandleImpl>(column_family);
-  ROCKS_LOG_INFO(immutable_db_options_.info_log, "[%s] Manual flush start.",
-                 cfh->GetName().c_str());
+
   Status s;
   if (immutable_db_options_.atomic_flush) {
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] (Atomic) Manual flush start.", cfh->GetName().c_str());
     s = AtomicFlushMemTables(flush_options, FlushReason::kManualFlush,
                              {cfh->cfd()});
   } else {
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] (Non-Atomic) Manual flush start.",
+                   cfh->GetName().c_str());
     s = FlushMemTable(cfh->cfd(), flush_options, FlushReason::kManualFlush);
   }
 
   ROCKS_LOG_INFO(immutable_db_options_.info_log,
                  "[%s] Manual flush finished, status: %s\n",
                  cfh->GetName().c_str(), s.ToString().c_str());
+
+  // cfh->
+
   return s;
 }
 
@@ -2276,12 +2290,17 @@ Status DBImpl::FlushMemTable(ColumnFamilyData* cfd,
                              const FlushOptions& flush_options,
                              FlushReason flush_reason,
                              bool entered_write_thread) {
+  ROCKS_LOG_INFO(immutable_db_options_.info_log, "[%s] FlushMemTable::START",
+                 cfd->GetName().c_str());
   // This method should not be called if atomic_flush is true.
   assert(!immutable_db_options_.atomic_flush);
   if (!flush_options.wait && write_controller_.IsStopped()) {
     std::ostringstream oss;
     oss << "Writes have been stopped, thus unable to perform manual flush. "
            "Please try again later after writes are resumed";
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "FlushMemTable::END cf=%s -> try again",
+                   cfd->GetName().c_str());
     return Status::TryAgain(oss.str());
   }
   Status s;
@@ -2290,6 +2309,9 @@ Status DBImpl::FlushMemTable(ColumnFamilyData* cfd,
     s = WaitUntilFlushWouldNotStallWrites(cfd, &flush_needed);
     TEST_SYNC_POINT("DBImpl::FlushMemTable:StallWaitDone");
     if (!s.ok() || !flush_needed) {
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] FlushMemTable::END -> no flush needed",
+                     cfd->GetName().c_str());
       return s;
     }
   }
@@ -2420,6 +2442,8 @@ Status DBImpl::FlushMemTable(ColumnFamilyData* cfd,
     }
   }
   TEST_SYNC_POINT("DBImpl::FlushMemTable:FlushMemTableFinished");
+  ROCKS_LOG_INFO(immutable_db_options_.info_log, "[%s] FlushMemTable::END",
+                 cfd->GetName().c_str());
   return s;
 }
 
@@ -2721,6 +2745,45 @@ Status DBImpl::WaitForFlushMemTables(
     const autovector<const uint64_t*>& flush_memtable_ids,
     bool resuming_from_bg_err, std::optional<FlushReason> flush_reason) {
   int num = static_cast<int>(cfds.size());
+
+  std::string cf_name;
+  if (num == 1) {
+    cf_name = cfds.at(0)->GetName();
+  } else if (num == 0) {
+    cf_name = std::string("-");
+  } else {
+    cf_name = std::string("<multiple>");
+  }
+
+  autovector<uint64_t> initial_versions;
+  std::string initial_versions_str;
+  for (size_t i = 0; i < cfds.size(); i++) {
+    if (i > 0) {
+      initial_versions_str.append(",");
+    }
+    auto version = cfds[i]->GetSuperVersionNumberRelaxed();
+    initial_versions.push_back(version);
+    initial_versions_str.append(std::to_string(version));
+  }
+
+  std::string memtable_ids;
+  for (size_t i = 0; i < flush_memtable_ids.size(); i++) {
+    if (i > 0) {
+      memtable_ids.append(",");
+    }
+    if (flush_memtable_ids[i] != nullptr) {
+      memtable_ids.append(std::to_string(*flush_memtable_ids[i]));
+    } else {
+      memtable_ids.append("null");
+    }
+  }
+
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "[%s] WaitForFlushMemTables::START num_CFDs=%u "
+                 "memtable_ids=[%s] initial_versions=[%s]",
+                 cf_name.c_str(), num, memtable_ids.c_str(),
+                 initial_versions_str.c_str());
+
   // Wait until the compaction completes
   InstrumentedMutexLock l(&mutex_);
   Status s;
@@ -2729,6 +2792,9 @@ Status DBImpl::WaitForFlushMemTables(
   while (resuming_from_bg_err || !error_handler_.IsDBStopped()) {
     if (shutting_down_.load(std::memory_order_acquire)) {
       s = Status::ShutdownInProgress();
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] WaitForFlushMemTables::END -> shutdown in progress",
+                     cf_name.c_str());
       return s;
     }
     // If an error has occurred during resumption, then no need to wait.
@@ -2736,6 +2802,9 @@ Status DBImpl::WaitForFlushMemTables(
     // return the status.
     if (!error_handler_.GetRecoveryError().ok()) {
       s = error_handler_.GetRecoveryError();
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] WaitForFlushMemTables -> break on error",
+                     cf_name.c_str());
       break;
     }
     // If BGWorkStopped, which indicate that there is a BG error and
@@ -2743,6 +2812,9 @@ Status DBImpl::WaitForFlushMemTables(
     if (!resuming_from_bg_err && error_handler_.IsBGWorkStopped() &&
         error_handler_.GetBGError().severity() < Status::Severity::kHardError) {
       s = error_handler_.GetBGError();
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] WaitForFlushMemTables::END -> BG error (%s)",
+                     cf_name.c_str(), s.ToString().c_str());
       return s;
     }
 
@@ -2750,6 +2822,9 @@ Status DBImpl::WaitForFlushMemTables(
     int num_dropped = 0;
     // Number of column families that have finished flush.
     int num_finished = 0;
+
+    /// PPP: this breaks early and doesn't wait long enough to pick up the
+    /// latest installed version! WHY?
     for (int i = 0; i < num; ++i) {
       if (cfds[i]->IsDropped()) {
         ++num_dropped;
@@ -2760,23 +2835,51 @@ Status DBImpl::WaitForFlushMemTables(
         // Make file ingestion's flush wait until SuperVersion is also updated
         // since after flush, it does range overlapping check and file level
         // assignment with the current SuperVersion.
-        if (!flush_reason.has_value() ||
-            flush_reason.value() != FlushReason::kExternalFileIngestion ||
-            cfds[i]->GetSuperVersion()->imm->GetID() ==
-                cfds[i]->imm()->current()->GetID()) {
+
+        if ((!flush_reason.has_value() ||
+             flush_reason.value() != FlushReason::kExternalFileIngestion ||
+             cfds[i]->GetSuperVersion()->imm->GetID() ==
+                 cfds[i]->imm()->current()->GetID())
+
+            // PPP: testing if this makes a difference to delay the break until
+            // after we install new version...
+            // && cfds[i]->GetSuperVersionNumber() > initial_versions[i]
+            // ...end-change
+        ) {
+          ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                         "[%s] WaitForFlushMemTables -> CF #%i finished with "
+                         "version number %llu - num not flushed: %i, earliest "
+                         "memtable id: %llu, imm id: %llu",
+                         cfds[i]->GetName().c_str(), i,
+                         cfds[i]->GetSuperVersion()->version_number,
+                         cfds[i]->imm()->NumNotFlushed(),
+                         cfds[i]->imm()->GetEarliestMemTableID(),
+                         cfds[i]->GetSuperVersion()->imm->GetID());
+
           ++num_finished;
         }
       }
     }
     if (1 == num_dropped && 1 == num) {
       s = Status::ColumnFamilyDropped();
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] WaitForFlushMemTables::END -> CF dropped",
+                     cf_name.c_str());
       return s;
     }
     // Column families involved in this flush request have either been dropped
     // or finished flush. Then it's time to finish waiting.
     if (num_dropped + num_finished == num) {
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] WaitForFlushMemTables -> break with num_dropped=%i "
+                     "num_finished=%i",
+                     cf_name.c_str(), num_dropped, num_finished);
       break;
     }
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] WaitForFlushMemTables -> waiting on bg_cv ...",
+                   cf_name.c_str());
+
     bg_cv_.Wait();
   }
   // If not resuming from bg error, and an error has caused the DB to stop,
@@ -2784,6 +2887,9 @@ Status DBImpl::WaitForFlushMemTables(
   if (!resuming_from_bg_err && error_handler_.IsDBStopped()) {
     s = error_handler_.GetBGError();
   }
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "[%s] WaitForFlushMemTables::END -> %s", cf_name.c_str(),
+                 s.ToString().c_str());
   return s;
 }
 
@@ -2873,6 +2979,10 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
     FlushThreadArg* fta = new FlushThreadArg;
     fta->db_ = this;
     fta->thread_pri_ = Env::Priority::HIGH;
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] DBImpl::MaybeScheduleFlushOrCompaction schedule "
+                   "background flush -> priority=HIGH",
+                   this->GetName().c_str());
     env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
                    &DBImpl::UnscheduleFlushCallback);
     --unscheduled_flushes_;
@@ -2891,6 +3001,10 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
       FlushThreadArg* fta = new FlushThreadArg;
       fta->db_ = this;
       fta->thread_pri_ = Env::Priority::LOW;
+      ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                     "[%s] DBImpl::MaybeScheduleFlushOrCompaction schedule "
+                     "background flush -> priority=LOW",
+                     this->GetName().c_str());
       env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::LOW, this,
                      &DBImpl::UnscheduleFlushCallback);
       --unscheduled_flushes_;
@@ -2924,6 +3038,10 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
     ca->prepicked_compaction = nullptr;
     bg_compaction_scheduled_++;
     unscheduled_compactions_--;
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] DBImpl::MaybeScheduleFlushOrCompaction schedule "
+                   "background compaction -> priority=LOW",
+                   this->GetName().c_str());
     env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
                    &DBImpl::UnscheduleCompactionCallback);
   }
@@ -3065,6 +3183,10 @@ void DBImpl::EnqueuePendingCompaction(ColumnFamilyData* cfd) {
   if (!cfd->queued_for_compaction() && cfd->NeedsCompaction()) {
     TEST_SYNC_POINT_CALLBACK("EnqueuePendingCompaction::cfd",
                              static_cast<void*>(cfd));
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] DBImpl::EnqueuePendingCompaction add to "
+                   "compaction queue",
+                   cfd->GetName().c_str());
     AddToCompactionQueue(cfd);
   }
 }
@@ -4283,6 +4405,11 @@ void DBImpl::InstallSuperVersionAndScheduleWork(
     ColumnFamilyData* cfd, SuperVersionContext* sv_context,
     std::optional<std::shared_ptr<SeqnoToTimeMapping>>
         new_seqno_to_time_mapping) {
+  ROCKS_LOG_INFO(
+      immutable_db_options_.info_log,
+      "[%s] InstallSuperVersionAndScheduleWork::START CFD super version=%lld",
+      cfd->GetName().c_str(), cfd->GetSuperVersionNumber());
+
   mutex_.AssertHeld();
 
   // Update max_total_in_memory_state_
@@ -4295,10 +4422,19 @@ void DBImpl::InstallSuperVersionAndScheduleWork(
 
   // this branch is unlikely to step in
   if (UNLIKELY(sv_context->new_superversion == nullptr)) {
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "[%s] InstallSuperVersionAndScheduleWork >> "
+                   "(UNLIKELY) allocating new SuperVersion struct",
+                   cfd->GetName().c_str());
+
     sv_context->NewSuperVersion();
   }
   cfd->InstallSuperVersion(sv_context, &mutex_,
                            std::move(new_seqno_to_time_mapping));
+  ROCKS_LOG_INFO(
+      immutable_db_options_.info_log,
+      "[%s] InstallSuperVersionAndScheduleWork >> InstallSuperVersion -> %lld",
+      cfd->GetName().c_str(), cfd->GetSuperVersionNumber());
 
   // There may be a small data race here. The snapshot tricking bottommost
   // compaction may already be released here. But assuming there will always be
@@ -4329,6 +4465,11 @@ void DBImpl::InstallSuperVersionAndScheduleWork(
       max_total_in_memory_state_ - old_memtable_size +
       cfd->GetLatestMutableCFOptions().write_buffer_size *
           cfd->GetLatestMutableCFOptions().max_write_buffer_number;
+
+  ROCKS_LOG_INFO(
+      immutable_db_options_.info_log,
+      "[%s] InstallSuperVersionAndScheduleWork::END CFD super version=%lld",
+      cfd->GetName().c_str(), cfd->GetSuperVersionNumber());
 }
 
 // ShouldPurge is called by FindObsoleteFiles when doing a full scan,

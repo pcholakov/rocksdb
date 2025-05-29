@@ -5003,6 +5003,9 @@ void DBImpl::GetColumnFamilyMetaData(ColumnFamilyHandle* column_family,
   auto* cfd =
       static_cast_with_check<ColumnFamilyHandleImpl>(column_family)->cfd();
   auto* sv = GetAndRefSuperVersion(cfd);
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "[%s] GetColumnFamilyMetaData -> SuperVersion version: %llu",
+                 column_family->GetName().c_str(), sv->version_number);
   {
     // Without mutex, Version::GetColumnFamilyMetaData will have data race
     // with Compaction::MarkFilesBeingCompacted. One solution is to use mutex,
