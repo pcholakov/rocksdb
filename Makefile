@@ -1620,6 +1620,9 @@ backup_engine_test: $(OBJ_DIR)/utilities/backup/backup_engine_test.o $(TEST_LIBR
 checkpoint_test: $(OBJ_DIR)/utilities/checkpoint/checkpoint_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+checkpoint_concurrent_export_test: $(OBJ_DIR)/utilities/checkpoint/checkpoint_concurrent_export_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 cache_simulator_test: $(OBJ_DIR)/utilities/simulator_cache/cache_simulator_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
