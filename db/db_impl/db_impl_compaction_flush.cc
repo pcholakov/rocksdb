@@ -2721,6 +2721,12 @@ Status DBImpl::WaitForFlushMemTables(
     const autovector<const uint64_t*>& flush_memtable_ids,
     bool resuming_from_bg_err, std::optional<FlushReason> flush_reason) {
   int num = static_cast<int>(cfds.size());
+
+  autovector<uint64_t> initial_versions;
+  for (size_t i = 0; i < cfds.size(); i++) {
+    initial_versions.push_back(cfds[i]->GetSuperVersionNumberRelaxed());
+  }
+
   // Wait until the compaction completes
   InstrumentedMutexLock l(&mutex_);
   Status s;
@@ -2760,10 +2766,12 @@ Status DBImpl::WaitForFlushMemTables(
         // Make file ingestion's flush wait until SuperVersion is also updated
         // since after flush, it does range overlapping check and file level
         // assignment with the current SuperVersion.
-        if (!flush_reason.has_value() ||
-            flush_reason.value() != FlushReason::kExternalFileIngestion ||
-            cfds[i]->GetSuperVersion()->imm->GetID() ==
-                cfds[i]->imm()->current()->GetID()) {
+        if ((!flush_reason.has_value() ||
+             flush_reason.value() != FlushReason::kExternalFileIngestion ||
+             cfds[i]->GetSuperVersion()->imm->GetID() ==
+                 cfds[i]->imm()->current()->GetID())
+            // Additional check to ensure that the SuperVersion has advanced
+            && cfds[i]->GetSuperVersionNumber() > initial_versions[i]) {
           ++num_finished;
         }
       }
